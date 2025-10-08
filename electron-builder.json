@@ -6,8 +6,7 @@
     "output": "release"
   },
   "files": [
-    "dist/**",
-    "dist-electron/**",
+    "out/**",
     "package.json"
   ],
   "asar": true,

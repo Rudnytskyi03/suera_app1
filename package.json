@@ -1,7 +1,7 @@
 {
   "name": "lingerie-manager",
   "version": "0.1.0",
-  "main": "dist-electron/main/index.js",
+  "main": "out/main/index.js",
   "author": "",
   "description": "Desktop management console for lingerie production workflows",
   "license": "MIT",
