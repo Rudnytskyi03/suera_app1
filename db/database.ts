@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { app } from 'electron';
 import Database from 'better-sqlite3';
 
@@ -9,7 +10,9 @@ function ensureDatabase() {
     throw new Error('Database requested before app was ready');
   }
   if (!database) {
-    const dbPath = path.join(app.getPath('userData'), 'lingerie-manager.db');
+    const userDataPath = app.getPath('userData');
+    fs.mkdirSync(userDataPath, { recursive: true });
+    const dbPath = path.join(userDataPath, 'lingerie-manager.db');
     database = new Database(dbPath);
     database.pragma('foreign_keys = ON');
     initializeSchema(database);
