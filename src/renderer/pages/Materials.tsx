@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Tag, UploadCloud, Edit, Trash2, ArrowDownToLine } from 'lucide-react';
+import { Plus, Search, Tag, UploadCloud, Edit, Trash2, ArrowDownToLine, ImagePlus, X } from 'lucide-react';
 import {
   createMaterial,
   deleteMaterial,
@@ -7,6 +7,7 @@ import {
   recordMaterialReceipt,
   updateMaterial
 } from '../services/materialsService';
+import type { MaterialSaveInput } from '../services/materialsService';
 import { Material } from '../types';
 import { useToast } from '../components/ToastProvider';
 import { PageHeader } from '../components/PageHeader';
@@ -23,8 +24,12 @@ const defaultForm = {
   category: 'Модал',
   unit: 'meters' as Material['unit'],
   quantity: 0,
-  pricePerUnit: 0,
-  photo: ''
+  pricePerUnit: 0
+};
+
+type PendingPhoto = {
+  file: File;
+  preview: string;
 };
 
 const createDefaultReceiptForm = () => ({
@@ -40,6 +45,9 @@ const MaterialsPage: React.FC = () => {
   const [category, setCategory] = useState('Все категории');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formState, setFormState] = useState(defaultForm);
+  const [existingPhoto, setExistingPhoto] = useState<{ url: string; path: string | null } | null>(null);
+  const [pendingPhoto, setPendingPhoto] = useState<PendingPhoto | null>(null);
+  const [originalPhotoPath, setOriginalPhotoPath] = useState<string | null>(null);
   const [editingMaterial, setEditingMaterial] = useState<Material | null>(null);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [receiptMaterial, setReceiptMaterial] = useState<Material | null>(null);
@@ -64,6 +72,13 @@ const MaterialsPage: React.FC = () => {
   }, [materials, search, category]);
 
   const handleOpenModal = (material?: Material) => {
+    setPendingPhoto((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous.preview);
+      }
+      return null;
+    });
+
     if (material) {
       setEditingMaterial(material);
       setFormState({
@@ -71,14 +86,38 @@ const MaterialsPage: React.FC = () => {
         category: material.category,
         unit: material.unit,
         quantity: material.quantity,
-        pricePerUnit: material.pricePerUnit,
-        photo: material.photo ?? ''
+        pricePerUnit: material.pricePerUnit
       });
+      setExistingPhoto(
+        material.photoUrl
+          ? {
+              url: material.photoUrl,
+              path: material.photoPath ?? null
+            }
+          : null
+      );
+      setOriginalPhotoPath(material.photoPath ?? null);
     } else {
       setEditingMaterial(null);
       setFormState({ ...defaultForm });
+      setExistingPhoto(null);
+      setOriginalPhotoPath(null);
     }
     setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingMaterial(null);
+    setFormState({ ...defaultForm });
+    setExistingPhoto(null);
+    setOriginalPhotoPath(null);
+    setPendingPhoto((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous.preview);
+      }
+      return null;
+    });
   };
 
   const handleOpenReceiptModal = (material: Material) => {
@@ -96,20 +135,71 @@ const MaterialsPage: React.FC = () => {
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
+      const payload: MaterialSaveInput = {
+        name: formState.name,
+        category: formState.category,
+        unit: formState.unit,
+        quantity: formState.quantity,
+        pricePerUnit: formState.pricePerUnit
+      };
+
+      if (pendingPhoto) {
+        const fileWithPath = pendingPhoto.file as File & { path?: string };
+        if (!fileWithPath.path) {
+          throw new Error(
+            'Не вдалося зчитати шлях до файлу. Запустіть застосунок як Electron-додаток та оберіть фото ще раз.'
+          );
+        }
+        payload.newPhoto = {
+          originalName: pendingPhoto.file.name,
+          filePath: fileWithPath.path
+        };
+      }
+
       if (editingMaterial) {
-        await updateMaterial(editingMaterial.id, formState);
+        if (!pendingPhoto && !existingPhoto && originalPhotoPath) {
+          payload.removePhoto = true;
+        }
+        await updateMaterial(editingMaterial.id, payload);
         showToast({ title: 'Матеріал оновлено', type: 'success' });
       } else {
-        await createMaterial(formState as any);
+        await createMaterial(payload);
         showToast({ title: 'Матеріал додано', type: 'success' });
       }
-      setIsModalOpen(false);
-      setFormState({ ...defaultForm });
-      setEditingMaterial(null);
+
+      handleCloseModal();
       await loadMaterials();
     } catch (error: any) {
       showToast({ title: 'Помилка збереження', description: error.message, type: 'error' });
     }
+  };
+
+  const handlePhotoSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    setPendingPhoto((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous.preview);
+      }
+      return { file, preview };
+    });
+    event.target.value = '';
+  };
+
+  const handleRemovePendingPhoto = () => {
+    setPendingPhoto((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous.preview);
+      }
+      return null;
+    });
+  };
+
+  const handleRemoveExistingPhoto = () => {
+    setExistingPhoto(null);
   };
 
   const handleDelete = async (material: Material) => {
@@ -219,9 +309,9 @@ const MaterialsPage: React.FC = () => {
               {filteredMaterials.map((material) => (
                 <tr key={material.id} className="transition hover:bg-purple-50/40">
                   <td className="px-4 py-3">
-                    {material.photo ? (
+                    {material.photoUrl ? (
                       <img
-                        src={material.photo}
+                        src={material.photoUrl}
                         alt={material.name}
                         className="h-12 w-12 rounded-xl object-cover shadow-inner"
                       />
@@ -413,20 +503,48 @@ const MaterialsPage: React.FC = () => {
                     required
                   />
                 </label>
-                <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-600">URL фото</span>
-                  <input
-                    value={formState.photo}
-                    onChange={(event) => setFormState({ ...formState, photo: event.target.value })}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                    placeholder="https://"
-                  />
-                </label>
+              </div>
+              <div className="space-y-2">
+                <span className="text-sm font-medium text-slate-600">Фото матеріалу</span>
+                <div className="flex flex-wrap gap-3">
+                  {existingPhoto && (
+                    <div className="relative h-20 w-20 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 shadow-sm">
+                      <img src={existingPhoto.url} alt="Фото матеріалу" className="h-full w-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={handleRemoveExistingPhoto}
+                        className="absolute right-1 top-1 rounded-full bg-black/50 p-1 text-white transition hover:bg-black/70"
+                        aria-label="Видалити фото"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+                  {pendingPhoto && (
+                    <div className="relative h-20 w-20 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 shadow-sm">
+                      <img src={pendingPhoto.preview} alt="Нове фото" className="h-full w-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={handleRemovePendingPhoto}
+                        className="absolute right-1 top-1 rounded-full bg-black/50 p-1 text-white transition hover:bg-black/70"
+                        aria-label="Скасувати нове фото"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+                  <label className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-purple-300 bg-purple-50/40 text-[10px] font-medium text-purple-600 transition hover:border-purple-400 hover:bg-purple-50">
+                    <ImagePlus className="h-5 w-5" />
+                    Додати
+                    <input type="file" accept="image/*" className="hidden" onChange={handlePhotoSelect} />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-400">Фото зберігається локально у даних застосунку та доступне без інтернету.</p>
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={handleCloseModal}
                   className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
                 >
                   Скасувати

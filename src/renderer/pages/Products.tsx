@@ -61,12 +61,23 @@ const ProductsPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formState, setFormState] = useState<ProductFormState>(createEmptyFormState());
+  const [expandedProducts, setExpandedProducts] = useState<Set<number>>(new Set());
   const { showToast } = useToast();
 
   const loadData = async () => {
     const [productsData, materialsData] = await Promise.all([fetchProducts(), fetchMaterials()]);
     setProducts(productsData);
     setMaterials(materialsData);
+    setExpandedProducts((previous) => {
+      const allowed = new Set(productsData.map((item) => item.id));
+      const next = new Set<number>();
+      previous.forEach((id) => {
+        if (allowed.has(id)) {
+          next.add(id);
+        }
+      });
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -107,6 +118,18 @@ const ProductsPage: React.FC = () => {
     setFormState((previous) => {
       previous.newPhotos.forEach((photo) => URL.revokeObjectURL(photo.preview));
       return createEmptyFormState();
+    });
+  };
+
+  const toggleProductDetails = (productId: number) => {
+    setExpandedProducts((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) {
+        next.delete(productId);
+      } else {
+        next.add(productId);
+      }
+      return next;
     });
   };
 
@@ -320,130 +343,156 @@ const ProductsPage: React.FC = () => {
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {filteredProducts.map((product) => (
-            <div
-              key={product.id}
-              className="group flex h-full flex-col rounded-3xl border border-slate-100 bg-white p-6 shadow-lg transition hover:-translate-y-1 hover:shadow-2xl"
-            >
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100">
-                {product.photos.length > 0 ? (
-                  <img
-                    src={product.photos[0].url}
-                    alt={product.name}
-                    className="h-48 w-full object-cover transition duration-500 group-hover:scale-105"
-                  />
-                ) : (
-                  <div className="flex h-48 w-full items-center justify-center text-4xl">🛍️</div>
-                )}
-              </div>
-              <div className="mt-5 flex flex-1 flex-col gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-slate-900">{product.name}</h3>
-                  <p className="mt-1 text-sm text-slate-500 line-clamp-3">{product.description}</p>
-                </div>
-
-                <div className="grid gap-3 rounded-2xl bg-purple-50/60 p-4 text-sm text-slate-700 sm:grid-cols-2">
-                  <div>
-                    <span className="text-xs uppercase text-purple-500">Собівартість</span>
-                    <p className="text-base font-semibold text-slate-900">{product.costPrice.toLocaleString()} ₴</p>
-                    <p className="text-xs text-slate-500">Матеріали: {product.materialsCost.toLocaleString()} ₴</p>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase text-purple-500">Додаткові витрати</span>
-                    <p className="text-base font-semibold text-slate-900">{product.additionalCost.toLocaleString()} ₴</p>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase text-purple-500">Ціна продажу</span>
-                    <p className="text-base font-semibold text-slate-900">{product.salePrice.toLocaleString()} ₴</p>
-                    {product.discountType !== 'none' ? (
-                      <p className="mt-1 flex items-center gap-1 text-xs text-rose-500">
-                        <BadgePercent className="h-3 w-3" />
-                        Знижка{' '}
-                        {product.discountType === 'percent'
-                          ? `${product.discountValue}%`
-                          : `${product.discountValue.toLocaleString()} ₴`}{' '}
-                        (−{product.discountAmount.toLocaleString()} ₴)
-                      </p>
-                    ) : (
-                      <p className="mt-1 text-xs text-slate-500">Без знижки</p>
-                    )}
-                    <p className="text-xs text-emerald-600">
-                      Ціна зі знижкою: {product.effectiveSalePrice.toLocaleString()} ₴
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase text-purple-500">Очікуваний прибуток</span>
-                    <p
-                      className={`text-base font-semibold ${
-                        product.profit >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                      }`}
-                    >
-                      {product.profit.toLocaleString()} ₴
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      Макс. комплектів: {product.maxProductionQuantity}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-100 bg-white/70 p-4 shadow-inner">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs uppercase text-purple-500">Матеріали</span>
-                    <span className="text-xs font-medium text-slate-500">Використано: {product.materials.length}</span>
-                  </div>
-                  <ul className="mt-3 space-y-2 text-sm text-slate-600">
-                    {product.materials.length > 0 ? (
-                      product.materials.map((material) => (
-                        <li
-                          key={material.id}
-                          className="flex items-center justify-between rounded-xl bg-purple-50/40 px-3 py-2"
-                        >
-                          <span className="font-medium text-slate-800">{material.name}</span>
-                          <span className="text-xs text-slate-500">
-                            {material.quantity} {UNIT_LABELS[material.unit]} • залишок {material.availableQuantity}{' '}
-                            {UNIT_LABELS[material.unit]}
-                          </span>
-                        </li>
-                      ))
-                    ) : (
-                      <li className="text-xs text-slate-400">Матеріали не додані</li>
-                    )}
-                  </ul>
-                </div>
-
-                <div className="rounded-2xl border border-slate-100 bg-white/70 p-4 shadow-inner">
-                  <span className="text-xs uppercase text-purple-500">Додаткові витрати</span>
-                  {product.additionalExpenses.length > 0 ? (
-                    <ul className="mt-3 space-y-2 text-sm text-slate-600">
-                      {product.additionalExpenses.map((expense, index) => (
-                        <li key={`${expense.label}-${index}`} className="flex items-center justify-between">
-                          <span>{expense.label}</span>
-                          <span className="font-medium text-slate-800">{expense.amount.toLocaleString()} ₴</span>
-                        </li>
-                      ))}
-                    </ul>
+          {filteredProducts.map((product) => {
+            const isExpanded = expandedProducts.has(product.id);
+            return (
+              <div
+                key={product.id}
+                className="group flex h-full flex-col rounded-3xl border border-slate-100 bg-white p-5 shadow-lg transition hover:-translate-y-1 hover:shadow-2xl"
+              >
+                <div className="relative h-36 overflow-hidden rounded-2xl bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100">
+                  {product.photos.length > 0 ? (
+                    <img
+                      src={product.photos[0].url}
+                      alt={product.name}
+                      className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                    />
                   ) : (
-                    <p className="mt-2 text-xs text-slate-400">Додаткові витрати відсутні</p>
+                    <div className="flex h-full w-full items-center justify-center text-3xl">🛍️</div>
                   )}
                 </div>
+                <div className="mt-4 flex flex-1 flex-col gap-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">{product.name}</h3>
+                    <p className="mt-1 text-sm text-slate-500 line-clamp-2">{product.description}</p>
+                  </div>
 
-                <div className="mt-auto flex gap-2">
-                  <button
-                    onClick={() => openModal(product)}
-                    className="flex-1 rounded-xl bg-purple-600/90 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:bg-purple-600"
-                  >
-                    Редагувати
-                  </button>
-                  <button
-                    onClick={() => handleDelete(product)}
-                    className="rounded-xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
-                  >
-                    Видалити
-                  </button>
+                  <div className="grid gap-3 rounded-2xl bg-purple-50/70 p-4 text-sm text-slate-700 sm:grid-cols-3">
+                    <div>
+                      <span className="text-xs uppercase text-purple-500">Собівартість</span>
+                      <p className="text-base font-semibold text-slate-900">{product.costPrice.toLocaleString()} ₴</p>
+                      <p className="text-[11px] text-slate-500">Матеріали: {product.materialsCost.toLocaleString()} ₴</p>
+                    </div>
+                    <div>
+                      <span className="text-xs uppercase text-purple-500">Ціна</span>
+                      <p className="text-base font-semibold text-slate-900">{product.salePrice.toLocaleString()} ₴</p>
+                      {product.discountType !== 'none' ? (
+                        <>
+                          <p className="mt-1 flex items-center gap-1 text-[11px] text-rose-500">
+                            <BadgePercent className="h-3 w-3" />
+                            Знижка{' '}
+                            {product.discountType === 'percent'
+                              ? `${product.discountValue}%`
+                              : `${product.discountValue.toLocaleString()} ₴`}{' '}
+                            (−{product.discountAmount.toLocaleString()} ₴)
+                          </p>
+                          <p className="text-[11px] text-emerald-600">Зі знижкою: {product.effectiveSalePrice.toLocaleString()} ₴</p>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-[11px] text-slate-500">Без знижки</p>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-xs uppercase text-purple-500">Прибуток</span>
+                      <p
+                        className={`text-base font-semibold ${
+                          product.profit >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                        }`}
+                      >
+                        {product.profit.toLocaleString()} ₴
+                      </p>
+                      <p className="text-[11px] text-slate-500">Макс. комплектів: {product.maxProductionQuantity}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-100 bg-white/70 px-4 py-3 shadow-inner">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-700">
+                      <span className="font-semibold text-slate-800">Матеріали: {product.materials.length}</span>
+                      <span className="text-xs text-slate-500">
+                        Додаткові витрати: {product.additionalCost.toLocaleString()} ₴
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                      <span>Ефективна ціна: {product.effectiveSalePrice.toLocaleString()} ₴</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleProductDetails(product.id)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-600 transition hover:bg-purple-100"
+                      >
+                        {isExpanded ? 'Сховати деталі' : 'Показати деталі'}
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="mt-3 space-y-3 text-sm text-slate-600">
+                        <div>
+                          <span className="text-xs uppercase text-purple-500">Матеріали</span>
+                          {product.materials.length > 0 ? (
+                            <ul className="mt-2 space-y-2">
+                              {product.materials.map((material) => (
+                                <li
+                                  key={material.id}
+                                  className="flex items-center justify-between rounded-xl bg-purple-50/40 px-3 py-2 text-xs text-slate-600"
+                                >
+                                  <span className="font-medium text-slate-800">{material.name}</span>
+                                  <span>
+                                    {material.quantity} {UNIT_LABELS[material.unit]} · залишок {material.availableQuantity}{' '}
+                                    {UNIT_LABELS[material.unit]}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-2 text-xs text-slate-400">Матеріали не додані</p>
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-xs uppercase text-purple-500">Додаткові витрати</span>
+                          {product.additionalExpenses.length > 0 ? (
+                            <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                              {product.additionalExpenses.map((expense, index) => (
+                                <li
+                                  key={`${expense.label}-${index}`}
+                                  className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
+                                >
+                                  <span>{expense.label}</span>
+                                  <span className="font-medium text-slate-800">{expense.amount.toLocaleString()} ₴</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-2 text-xs text-slate-400">Додаткові витрати відсутні</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-3 text-xs text-slate-600">
+                    Можна зібрати{' '}
+                    <span className="font-semibold text-slate-900">
+                      {Number.isFinite(product.maxProductionQuantity) ? product.maxProductionQuantity : 0}
+                    </span>{' '}
+                    комплектів із поточних запасів.
+                  </div>
+
+                  <div className="mt-auto flex gap-2">
+                    <button
+                      onClick={() => openModal(product)}
+                      className="flex-1 rounded-xl bg-purple-600/90 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:bg-purple-600"
+                    >
+                      Редагувати
+                    </button>
+                    <button
+                      onClick={() => handleDelete(product)}
+                      className="rounded-xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
+                    >
+                      Видалити
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {filteredProducts.length === 0 && (
@@ -454,10 +503,12 @@ const ProductsPage: React.FC = () => {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-3xl rounded-3xl bg-white p-8 shadow-2xl">
-            <h2 className="text-xl font-semibold text-slate-900">{formState.id ? 'Редагування товару' : 'Новий товар'}</h2>
-            <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="mx-auto flex min-h-full w-full max-w-3xl items-start justify-center">
+            <div className="w-full overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="max-h-[90vh] overflow-y-auto p-6 sm:p-8">
+                <h2 className="text-xl font-semibold text-slate-900">{formState.id ? 'Редагування товару' : 'Новий товар'}</h2>
+                <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Назва</span>
@@ -728,22 +779,24 @@ const ProductsPage: React.FC = () => {
                 комплектів з поточних запасів.
               </div>
 
-              <div className="flex justify-end gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
-                >
-                  Скасувати
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl"
-                >
-                  Зберегти товар
-                </button>
+                  <div className="flex justify-end gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
+                    >
+                      Скасувати
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl"
+                    >
+                      Зберегти товар
+                    </button>
+                  </div>
+                </form>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}

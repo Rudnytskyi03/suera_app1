@@ -5,7 +5,8 @@ export type Material = {
   unit: 'meters' | 'pieces';
   quantity: number;
   pricePerUnit: number;
-  photo?: string;
+  photoUrl?: string;
+  photoPath?: string | null;
 };
 
 export type MaterialReceiptInput = {

@@ -5,36 +5,92 @@ import { pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { getDatabase, MaterialRecord, OrderRecord, ProductRecord, ClientRecord } from '../../db/database';
 
-const PHOTO_DIRECTORY = 'product-photos';
+const PHOTO_DIRECTORIES = {
+  product: 'product-photos',
+  material: 'material-photos'
+} as const;
 
-function getPhotosDirectory() {
-  return path.join(app.getPath('userData'), PHOTO_DIRECTORY);
+type PhotoScope = keyof typeof PHOTO_DIRECTORIES;
+
+function getPhotosDirectory(scope: PhotoScope = 'product') {
+  return path.join(app.getPath('userData'), PHOTO_DIRECTORIES[scope]);
 }
 
-function ensurePhotosDirectory() {
-  const directory = getPhotosDirectory();
+function ensurePhotosDirectory(scope: PhotoScope = 'product') {
+  const directory = getPhotosDirectory(scope);
   if (!fs.existsSync(directory)) {
     fs.mkdirSync(directory, { recursive: true });
   }
 }
 
-function resolvePhotoPath(storedPath: string | null | undefined) {
+function resolvePhotoPath(storedPath: string | null | undefined, scope: PhotoScope = 'product') {
   if (!storedPath) {
     return null;
   }
   if (path.isAbsolute(storedPath)) {
     return storedPath;
   }
-  return path.join(app.getPath('userData'), storedPath);
+  const absolute = path.join(app.getPath('userData'), storedPath);
+  if (fs.existsSync(absolute)) {
+    return absolute;
+  }
+  return path.join(getPhotosDirectory(scope), storedPath);
 }
 
-function generatePhotoRelativePath(originalName: string) {
+function generatePhotoRelativePath(originalName: string, scope: PhotoScope = 'product') {
   const timestamp = Date.now();
   const ext = path.extname(originalName) || '.png';
   const slug = originalName.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
   const baseName = slug ? slug.replace(/^-+|-+$/g, '') : 'photo';
   const random = Math.floor(Math.random() * 1_000_000);
-  return path.join(PHOTO_DIRECTORY, `${baseName || 'photo'}-${timestamp}-${random}${ext}`);
+  return path.join(PHOTO_DIRECTORIES[scope], `${baseName || 'photo'}-${timestamp}-${random}${ext}`);
+}
+
+function deleteStoredPhoto(storedPath: string | null | undefined, scope: PhotoScope = 'product') {
+  if (!storedPath) {
+    return;
+  }
+  const absolute = resolvePhotoPath(storedPath, scope);
+  if (absolute && fs.existsSync(absolute)) {
+    try {
+      fs.unlinkSync(absolute);
+    } catch (error) {
+      // Ignore file deletion errors to avoid crashing the flow.
+    }
+  }
+}
+
+function persistPhotoFromPayload(
+  payload: { originalName: string; filePath: string },
+  scope: PhotoScope
+): string {
+  const sourcePath = payload.filePath;
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error('Вибраний файл більше не існує. Будь ласка, оберіть його знову.');
+  }
+  ensurePhotosDirectory(scope);
+  const relativePath = generatePhotoRelativePath(payload.originalName, scope);
+  const destination = path.join(app.getPath('userData'), relativePath);
+  fs.copyFileSync(sourcePath, destination);
+  return relativePath;
+}
+
+function mapMaterialRecord(record: MaterialRecord) {
+  const absolutePhoto = resolvePhotoPath(record.photo ?? undefined, 'material');
+  const fileUrl = absolutePhoto && fs.existsSync(absolutePhoto) ? pathToFileURL(absolutePhoto).toString() : undefined;
+  const remoteUrl = !fileUrl && record.photo && /^https?:\/\//i.test(record.photo) ? record.photo : undefined;
+  const photoUrl = fileUrl ?? remoteUrl;
+
+  return {
+    id: record.id,
+    name: record.name,
+    category: record.category,
+    unit: record.unit,
+    quantity: record.quantity,
+    pricePerUnit: record.price_per_unit,
+    photoUrl,
+    photoPath: record.photo ?? null
+  };
 }
 
 function calculateDiscount(type: 'none' | 'percent' | 'fixed', value: number, salePrice: number) {
@@ -128,51 +184,71 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('materials:list', () => {
+    ensurePhotosDirectory('material');
     const stmt = db.prepare('SELECT * FROM materials ORDER BY name');
     const materials = stmt.all() as MaterialRecord[];
-    return materials.map((material) => ({
-      id: material.id,
-      name: material.name,
-      category: material.category,
-      unit: material.unit,
-      quantity: material.quantity,
-      pricePerUnit: material.price_per_unit,
-      photo: material.photo ?? undefined
-    }));
+    return materials.map(mapMaterialRecord);
   });
 
   ipcMain.handle('materials:create', (_event, payload) => {
+    const { newPhoto, ...rest } = payload as {
+      name: string;
+      category: string;
+      unit: 'meters' | 'pieces';
+      quantity: number;
+      pricePerUnit: number;
+      newPhoto?: { originalName: string; filePath: string };
+    };
+
+    let photoPath: string | null = null;
+    if (newPhoto) {
+      photoPath = persistPhotoFromPayload(newPhoto, 'material');
+    }
+
     const insert = db.prepare(
       'INSERT INTO materials (name, category, unit, quantity, price_per_unit, photo) VALUES (@name, @category, @unit, @quantity, @pricePerUnit, @photo)'
     );
-    const result = insert.run(payload);
+    const result = insert.run({ ...rest, photo: photoPath });
     const created = db.prepare('SELECT * FROM materials WHERE id = ?').get(result.lastInsertRowid) as MaterialRecord;
-    return {
-      id: created.id,
-      name: created.name,
-      category: created.category,
-      unit: created.unit,
-      quantity: created.quantity,
-      pricePerUnit: created.price_per_unit,
-      photo: created.photo ?? undefined
-    };
+    return mapMaterialRecord(created);
   });
 
   ipcMain.handle('materials:update', (_event, id: number, payload) => {
+    const material = db.prepare('SELECT * FROM materials WHERE id = ?').get(id) as MaterialRecord | undefined;
+    if (!material) {
+      throw new Error('Матеріал не знайдено');
+    }
+
+    const { newPhoto, removePhoto, ...rest } = payload as {
+      name: string;
+      category: string;
+      unit: 'meters' | 'pieces';
+      quantity: number;
+      pricePerUnit: number;
+      newPhoto?: { originalName: string; filePath: string };
+      removePhoto?: boolean;
+    };
+
+    let photoPath: string | null = material.photo ?? null;
+
+    if (removePhoto && photoPath) {
+      deleteStoredPhoto(photoPath, 'material');
+      photoPath = null;
+    }
+
+    if (newPhoto) {
+      if (photoPath) {
+        deleteStoredPhoto(photoPath, 'material');
+      }
+      photoPath = persistPhotoFromPayload(newPhoto, 'material');
+    }
+
     const update = db.prepare(
       'UPDATE materials SET name=@name, category=@category, unit=@unit, quantity=@quantity, price_per_unit=@pricePerUnit, photo=@photo WHERE id=@id'
     );
-    update.run({ ...payload, id });
-    const material = db.prepare('SELECT * FROM materials WHERE id = ?').get(id) as MaterialRecord;
-    return {
-      id: material.id,
-      name: material.name,
-      category: material.category,
-      unit: material.unit,
-      quantity: material.quantity,
-      pricePerUnit: material.price_per_unit,
-      photo: material.photo ?? undefined
-    };
+    update.run({ ...rest, photo: photoPath, id });
+    const updated = db.prepare('SELECT * FROM materials WHERE id = ?').get(id) as MaterialRecord;
+    return mapMaterialRecord(updated);
   });
 
   ipcMain.handle(
@@ -225,19 +301,15 @@ export function registerIpcHandlers() {
         .prepare('SELECT * FROM materials WHERE id = ?')
         .get(materialId) as MaterialRecord;
 
-      return {
-        id: updated.id,
-        name: updated.name,
-        category: updated.category,
-        unit: updated.unit,
-        quantity: updated.quantity,
-        pricePerUnit: updated.price_per_unit,
-        photo: updated.photo ?? undefined
-      };
+      return mapMaterialRecord(updated);
     }
   );
 
   ipcMain.handle('materials:delete', (_event, id: number) => {
+    const existing = db.prepare('SELECT photo FROM materials WHERE id = ?').get(id) as { photo?: string | null } | undefined;
+    if (existing?.photo) {
+      deleteStoredPhoto(existing.photo, 'material');
+    }
     const del = db.prepare('DELETE FROM materials WHERE id = ?');
     del.run(id);
     return { success: true };
