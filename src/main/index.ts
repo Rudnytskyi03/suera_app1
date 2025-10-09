@@ -1,8 +1,20 @@
 import { app, BrowserWindow } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import { registerIpcHandlers } from './ipc';
 import '../common/env';
+
+const PRODUCT_NAME = 'Lingerie Brand Manager';
+
+function configureUserDataPath() {
+  const desiredUserDataPath = path.join(app.getPath('appData'), PRODUCT_NAME);
+  if (app.getPath('userData') !== desiredUserDataPath) {
+    app.setPath('userData', desiredUserDataPath);
+  }
+
+  fs.mkdirSync(desiredUserDataPath, { recursive: true });
+}
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -31,7 +43,11 @@ function createWindow() {
   }
 }
 
+app.setName(PRODUCT_NAME);
+
 app.whenReady().then(() => {
+  configureUserDataPath();
+
   electronApp.setAppUserModelId('com.lingerie.manager');
 
   app.on('browser-window-created', (_, window) => {
