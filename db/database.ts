@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
+import bcrypt from 'bcryptjs';
 import Database from 'better-sqlite3';
 
 let database: Database.Database | null = null;
@@ -87,13 +88,28 @@ CREATE TABLE IF NOT EXISTS order_items (
 );
 `);
 
-  const defaultUserStmt = db.prepare('SELECT COUNT(*) as count FROM users');
-  const userCount = defaultUserStmt.get() as { count: number };
+  const defaultUserStmt = db.prepare('SELECT * FROM users WHERE email = ?');
+  const existingDefaultUser = defaultUserStmt.get('admin@lingeriedashboard.app') as
+    | { id: number; password: string }
+    | undefined;
 
-  if (userCount.count === 0) {
+  if (!existingDefaultUser) {
     const insertUser = db.prepare('INSERT INTO users (email, password) VALUES (?, ?)');
-    // password: admin123
-    insertUser.run('admin@lingeriedashboard.app', '$2a$10$4qozzZ1UlCT3VkOITkkpOuM9D8GEnBuFyDC11Fx6E9CA/lcW2YCiK');
+    const hashedPassword = bcrypt.hashSync('admin123', 10);
+    insertUser.run('admin@lingeriedashboard.app', hashedPassword);
+  } else {
+    let needsUpdate = false;
+    try {
+      const matches = bcrypt.compareSync('admin123', existingDefaultUser.password);
+      needsUpdate = !matches;
+    } catch (error) {
+      needsUpdate = true;
+    }
+
+    if (needsUpdate) {
+      const hashedPassword = bcrypt.hashSync('admin123', 10);
+      db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, existingDefaultUser.id);
+    }
   }
 }
 
