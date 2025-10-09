@@ -535,7 +535,7 @@ const ProductsPage: React.FC = () => {
                         {selectedMaterialDetails[index]?.material && (
                           <span>
                             Залишок: {selectedMaterialDetails[index]?.available}{' '}
-                            {UNIT_LABELS[selectedMaterialDetails[index]?.material?.unit ?? 'шт'}
+                            {UNIT_LABELS[selectedMaterialDetails[index]?.material?.unit ?? 'шт']}
                           </span>
                         )}
                       </div>
