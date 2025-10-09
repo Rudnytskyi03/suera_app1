@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('api', {
     delete: (id: number) => ipcRenderer.invoke('orders:delete', id),
     generateNumber: () => ipcRenderer.invoke('orders:generateNumber')
   },
+  clients: {
+    list: () => ipcRenderer.invoke('clients:list'),
+    salesStats: (filters: { startDate?: string; endDate?: string }) =>
+      ipcRenderer.invoke('clients:salesStats', filters)
+  },
   reports: {
     overview: () => ipcRenderer.invoke('reports:overview')
   }

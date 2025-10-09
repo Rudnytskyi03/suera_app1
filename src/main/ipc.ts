@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
-import { getDatabase, MaterialRecord, OrderRecord, ProductRecord } from '../../db/database';
+import { getDatabase, MaterialRecord, OrderRecord, ProductRecord, ClientRecord } from '../../db/database';
 
 const PHOTO_DIRECTORY = 'product-photos';
 
@@ -47,6 +47,19 @@ function calculateDiscount(type: 'none' | 'percent' | 'fixed', value: number, sa
   return 0;
 }
 
+function normalizePhone(phone?: string | null) {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
+function sanitizeInstagram(handle?: string | null) {
+  if (!handle) return null;
+  const trimmed = handle.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/^@+/, '');
+}
+
 function mapExpensesForLegacyColumns(expenses: Array<{ label: string; amount: number }>) {
   let sewing = 0;
   let packaging = 0;
@@ -78,6 +91,26 @@ function mapExpensesForLegacyColumns(expenses: Array<{ label: string; amount: nu
 
 export function registerIpcHandlers() {
   const db = getDatabase();
+  const findClientStmt = db.prepare(
+    `SELECT * FROM clients
+       WHERE ((@instagram IS NOT NULL AND instagram IS NOT NULL AND LOWER(instagram) = LOWER(@instagram))
+          OR (@phone IS NOT NULL AND phone IS NOT NULL AND phone = @phone))
+       ORDER BY id
+       LIMIT 1`
+  );
+  const insertClientStmt = db.prepare(
+    `INSERT INTO clients (instagram, first_name, last_name, phone, birth_date)
+     VALUES (@instagram, @firstName, @lastName, @phone, @birthDate)`
+  );
+  const updateClientStmt = db.prepare(
+    `UPDATE clients
+        SET instagram = COALESCE(@instagram, instagram),
+            first_name = CASE WHEN LENGTH(@firstName) > 0 THEN @firstName ELSE first_name END,
+            last_name = CASE WHEN LENGTH(@lastName) > 0 THEN @lastName ELSE last_name END,
+            phone = COALESCE(@phone, phone),
+            birth_date = COALESCE(@birthDate, birth_date)
+      WHERE id = @id`
+  );
   ipcMain.handle('auth:login', (_event, email: string, password: string) => {
     const stmt = db.prepare('SELECT * FROM users WHERE email = ?');
     const user = stmt.get(email) as { id: number; email: string; password: string } | undefined;
@@ -533,7 +566,74 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('orders:save', (_event, payload) => {
-    const { id, orderNumber, customerFirstName, customerLastName, customerInstagram, deliveryAddress, items, status } = payload;
+    const {
+      id,
+      orderNumber,
+      customerFirstName,
+      customerLastName,
+      customerInstagram,
+      customerPhone,
+      customerBirthDate,
+      deliveryAddress,
+      items,
+      status,
+      clientId: payloadClientId
+    } = payload;
+    const trimmedFirstName = (customerFirstName ?? '').trim();
+    const trimmedLastName = (customerLastName ?? '').trim();
+    const sanitizedInstagram = sanitizeInstagram(customerInstagram);
+    const normalizedPhone = normalizePhone(customerPhone);
+    const normalizedBirthDate =
+      typeof customerBirthDate === 'string' && customerBirthDate.length > 0 ? customerBirthDate : null;
+
+    let clientId: number | null = payloadClientId ?? null;
+
+    if (clientId) {
+      const existingClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId) as
+        | ClientRecord
+        | undefined;
+      if (existingClient) {
+        updateClientStmt.run({
+          id: existingClient.id,
+          instagram: sanitizedInstagram ?? existingClient.instagram,
+          firstName: trimmedFirstName || existingClient.first_name,
+          lastName: trimmedLastName || existingClient.last_name,
+          phone: normalizedPhone ?? existingClient.phone,
+          birthDate: normalizedBirthDate ?? existingClient.birth_date
+        });
+      } else {
+        clientId = null;
+      }
+    }
+
+    if (!clientId && (sanitizedInstagram || normalizedPhone)) {
+      const existing = findClientStmt.get({ instagram: sanitizedInstagram, phone: normalizedPhone }) as
+        | ClientRecord
+        | undefined;
+      if (existing) {
+        clientId = existing.id;
+        updateClientStmt.run({
+          id: existing.id,
+          instagram: sanitizedInstagram ?? existing.instagram,
+          firstName: trimmedFirstName || existing.first_name,
+          lastName: trimmedLastName || existing.last_name,
+          phone: normalizedPhone ?? existing.phone,
+          birthDate: normalizedBirthDate ?? existing.birth_date
+        });
+      }
+    }
+
+    if (!clientId && (trimmedFirstName || trimmedLastName || sanitizedInstagram || normalizedPhone)) {
+      const inserted = insertClientStmt.run({
+        instagram: sanitizedInstagram ?? null,
+        firstName: trimmedFirstName || 'Клієнт',
+        lastName: trimmedLastName || null,
+        phone: normalizedPhone ?? null,
+        birthDate: normalizedBirthDate ?? null
+      });
+      clientId = Number(inserted.lastInsertRowid);
+    }
+
     const totalAmount = items.reduce(
       (acc: number, item: any) => acc + (item.price - item.discount) * item.quantity,
       0
@@ -542,13 +642,17 @@ export function registerIpcHandlers() {
     if (id) {
       db.prepare(
         `UPDATE orders SET order_number=@orderNumber, customer_first_name=@customerFirstName, customer_last_name=@customerLastName,
-         customer_instagram=@customerInstagram, delivery_address=@deliveryAddress, total_amount=@totalAmount, status=@status WHERE id=@id`
+         customer_instagram=@customerInstagram, customer_phone=@customerPhone, customer_birth_date=@customerBirthDate,
+         client_id=@clientId, delivery_address=@deliveryAddress, total_amount=@totalAmount, status=@status WHERE id=@id`
       ).run({
         id,
         orderNumber,
-        customerFirstName,
-        customerLastName,
-        customerInstagram,
+        customerFirstName: trimmedFirstName,
+        customerLastName: trimmedLastName,
+        customerInstagram: sanitizedInstagram ?? null,
+        customerPhone: normalizedPhone ?? null,
+        customerBirthDate: normalizedBirthDate,
+        clientId,
         deliveryAddress,
         totalAmount,
         status
@@ -566,14 +670,17 @@ export function registerIpcHandlers() {
       return { id, totalAmount };
     } else {
       const insert = db.prepare(
-        `INSERT INTO orders (order_number, customer_first_name, customer_last_name, customer_instagram, delivery_address, total_amount, status)
-         VALUES (@orderNumber, @customerFirstName, @customerLastName, @customerInstagram, @deliveryAddress, @totalAmount, @status)`
+        `INSERT INTO orders (order_number, customer_first_name, customer_last_name, customer_instagram, customer_phone, customer_birth_date, client_id, delivery_address, total_amount, status)
+         VALUES (@orderNumber, @customerFirstName, @customerLastName, @customerInstagram, @customerPhone, @customerBirthDate, @clientId, @deliveryAddress, @totalAmount, @status)`
       );
       const result = insert.run({
         orderNumber,
-        customerFirstName,
-        customerLastName,
-        customerInstagram,
+        customerFirstName: trimmedFirstName || 'Клієнт',
+        customerLastName: trimmedLastName || '',
+        customerInstagram: sanitizedInstagram ?? null,
+        customerPhone: normalizedPhone ?? null,
+        customerBirthDate: normalizedBirthDate,
+        clientId,
         deliveryAddress,
         totalAmount,
         status
@@ -605,6 +712,71 @@ export function registerIpcHandlers() {
     }
     const numeric = Number(lastOrder.order_number.split('-')[1]) + 1;
     return `LNG-${numeric.toString().padStart(4, '0')}`;
+  });
+
+  ipcMain.handle('clients:list', () => {
+    const clients = db
+      .prepare(
+        `SELECT c.*, COUNT(o.id) as total_orders, MAX(o.created_at) as last_order_at,
+                SUM(CASE WHEN o.status = 'completed' THEN o.total_amount ELSE 0 END) as completed_revenue
+           FROM clients c
+           LEFT JOIN orders o ON o.client_id = c.id
+          GROUP BY c.id
+          ORDER BY LOWER(c.first_name || ' ' || COALESCE(c.last_name, ''))`
+      )
+      .all() as Array<
+      ClientRecord & {
+        total_orders: number;
+        last_order_at: string | null;
+        completed_revenue: number | null;
+      }
+    >;
+
+    return clients.map((client) => ({
+      id: client.id,
+      instagram: client.instagram,
+      firstName: client.first_name,
+      lastName: client.last_name,
+      phone: client.phone,
+      birthDate: client.birth_date,
+      createdAt: client.created_at,
+      totalOrders: client.total_orders,
+      lastOrderAt: client.last_order_at,
+      completedRevenue: client.completed_revenue ?? 0
+    }));
+  });
+
+  ipcMain.handle('clients:salesStats', (_event, filters: { startDate?: string; endDate?: string } = {}) => {
+    const conditions = ["status = 'completed'"];
+    const params: Record<string, unknown> = {};
+
+    if (filters.startDate) {
+      conditions.push('date(created_at) >= date(@startDate)');
+      params.startDate = filters.startDate;
+    }
+
+    if (filters.endDate) {
+      conditions.push('date(created_at) <= date(@endDate)');
+      params.endDate = filters.endDate;
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const rows = db
+      .prepare(
+        `SELECT date(created_at) as sale_date, COUNT(*) as orders, SUM(total_amount) as revenue
+           FROM orders
+           ${whereClause}
+          GROUP BY sale_date
+          ORDER BY sale_date`
+      )
+      .all(params) as Array<{ sale_date: string; orders: number; revenue: number | null }>;
+
+    return rows.map((row) => ({
+      date: row.sale_date,
+      orders: row.orders,
+      revenue: row.revenue ?? 0
+    }));
   });
 
   ipcMain.handle('reports:overview', () => {

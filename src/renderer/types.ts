@@ -72,6 +72,9 @@ export type Order = {
   customer_first_name: string;
   customer_last_name: string;
   customer_instagram?: string;
+  customer_phone?: string;
+  customer_birth_date?: string;
+  client_id?: number | null;
   delivery_address?: string;
   status: 'new' | 'shipped' | 'returned' | 'completed';
   total_amount: number;
@@ -83,4 +86,23 @@ export type Order = {
     price: number;
     discount: number;
   }>;
+};
+
+export type Client = {
+  id: number;
+  instagram?: string | null;
+  firstName: string;
+  lastName?: string | null;
+  phone?: string | null;
+  birthDate?: string | null;
+  createdAt: string;
+  totalOrders: number;
+  lastOrderAt?: string | null;
+  completedRevenue: number;
+};
+
+export type ClientSalesStat = {
+  date: string;
+  orders: number;
+  revenue: number;
 };

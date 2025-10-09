@@ -49,6 +49,16 @@ CREATE TABLE IF NOT EXISTS material_receipts (
   received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  instagram TEXT UNIQUE,
+  first_name TEXT NOT NULL,
+  last_name TEXT,
+  phone TEXT,
+  birth_date TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -92,6 +102,9 @@ CREATE TABLE IF NOT EXISTS orders (
   customer_first_name TEXT NOT NULL,
   customer_last_name TEXT NOT NULL,
   customer_instagram TEXT,
+  customer_phone TEXT,
+  customer_birth_date TEXT,
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
   delivery_address TEXT,
   total_amount REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'new',
@@ -114,6 +127,10 @@ CREATE TABLE IF NOT EXISTS order_items (
   ensureColumn(db, 'products', 'discount_value', 'discount_value REAL NOT NULL DEFAULT 0');
   ensureProductPhotosColumnRenamed(db);
   ensureProductExpensesTable(db);
+  ensureColumn(db, 'orders', 'customer_phone', 'customer_phone TEXT');
+  ensureColumn(db, 'orders', 'customer_birth_date', 'customer_birth_date TEXT');
+  ensureColumn(db, 'orders', 'client_id', 'client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL');
+  backfillClientsFromOrders(db);
 
   const defaultUserStmt = db.prepare('SELECT * FROM users WHERE email = ?');
   const existingDefaultUser = defaultUserStmt.get('admin@lingeriedashboard.app') as
@@ -177,6 +194,113 @@ function ensureProductExpensesTable(db: Database.Database) {
 }
 
 
+function normalizePhone(phone?: string | null) {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
+function sanitizeInstagram(handle?: string | null) {
+  if (!handle) return null;
+  const trimmed = handle.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/^@+/, '');
+}
+
+function backfillClientsFromOrders(db: Database.Database) {
+  const orders = db
+    .prepare(
+      `SELECT id, customer_first_name, customer_last_name, customer_instagram, customer_phone, customer_birth_date, client_id
+       FROM orders`
+    )
+    .all() as Array<{
+      id: number;
+      customer_first_name: string;
+      customer_last_name: string;
+      customer_instagram: string | null;
+      customer_phone: string | null;
+      customer_birth_date: string | null;
+      client_id: number | null;
+    }>;
+
+  if (orders.length === 0) {
+    return;
+  }
+
+  const findClient = db.prepare(
+    `SELECT * FROM clients
+     WHERE ((@instagram IS NOT NULL AND instagram IS NOT NULL AND LOWER(instagram) = LOWER(@instagram))
+        OR (@phone IS NOT NULL AND phone IS NOT NULL AND phone = @phone))
+     ORDER BY id
+     LIMIT 1`
+  );
+
+  const insertClient = db.prepare(
+    `INSERT INTO clients (instagram, first_name, last_name, phone, birth_date)
+     VALUES (@instagram, @firstName, @lastName, @phone, @birthDate)`
+  );
+
+  const updateClient = db.prepare(
+    `UPDATE clients
+        SET instagram = COALESCE(@instagram, instagram),
+            first_name = CASE WHEN LENGTH(@firstName) > 0 THEN @firstName ELSE first_name END,
+            last_name = CASE WHEN LENGTH(@lastName) > 0 THEN @lastName ELSE last_name END,
+            phone = COALESCE(@phone, phone),
+            birth_date = COALESCE(@birthDate, birth_date)
+      WHERE id = @id`
+  );
+
+  const updateOrder = db.prepare(
+    'UPDATE orders SET client_id = @clientId, customer_phone = @phone WHERE id = @orderId'
+  );
+
+  const updateOrderPhoneOnly = db.prepare('UPDATE orders SET customer_phone = @phone WHERE id = @orderId');
+
+  for (const order of orders) {
+    const sanitizedInstagram = sanitizeInstagram(order.customer_instagram);
+    const normalizedPhone = normalizePhone(order.customer_phone);
+
+    if (order.customer_phone !== normalizedPhone) {
+      updateOrderPhoneOnly.run({ orderId: order.id, phone: normalizedPhone ?? null });
+    }
+
+    if (order.client_id || (!sanitizedInstagram && !normalizedPhone)) {
+      continue;
+    }
+
+    const existingClient = findClient.get({ instagram: sanitizedInstagram, phone: normalizedPhone }) as
+      | ClientRecord
+      | undefined;
+
+    let clientId = existingClient?.id ?? null;
+
+    if (existingClient) {
+      updateClient.run({
+        id: existingClient.id,
+        instagram: sanitizedInstagram ?? existingClient.instagram,
+        firstName: order.customer_first_name || existingClient.first_name,
+        lastName: order.customer_last_name || existingClient.last_name,
+        phone: normalizedPhone ?? existingClient.phone,
+        birthDate: order.customer_birth_date ?? existingClient.birth_date
+      });
+    } else {
+      const result = insertClient.run({
+        instagram: sanitizedInstagram ?? null,
+        firstName: order.customer_first_name || 'Клієнт',
+        lastName: order.customer_last_name || null,
+        phone: normalizedPhone,
+        birthDate: order.customer_birth_date ?? null
+      });
+      clientId = Number(result.lastInsertRowid);
+    }
+
+    if (clientId) {
+      updateOrder.run({ orderId: order.id, clientId, phone: normalizedPhone ?? null });
+    }
+  }
+}
+
+
 export type MaterialRecord = {
   id: number;
   name: string;
@@ -210,8 +334,21 @@ export type OrderRecord = {
   customer_first_name: string;
   customer_last_name: string;
   customer_instagram: string | null;
+  customer_phone: string | null;
+  customer_birth_date: string | null;
+  client_id: number | null;
   delivery_address: string | null;
   total_amount: number;
   status: 'new' | 'shipped' | 'returned' | 'completed';
+  created_at: string;
+};
+
+export type ClientRecord = {
+  id: number;
+  instagram: string | null;
+  first_name: string;
+  last_name: string | null;
+  phone: string | null;
+  birth_date: string | null;
   created_at: string;
 };

@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Calendar, FilePlus2, Filter, PackageSearch, Search, ShoppingCart, Trash2 } from 'lucide-react';
+import { Calendar, FilePlus2, Filter, Gift, PackageSearch, Phone, Search, ShoppingCart, Trash2, UserRound } from 'lucide-react';
 import { fetchOrders, saveOrder, deleteOrder, generateOrderNumber } from '../services/ordersService';
 import { fetchProducts } from '../services/productsService';
-import { Order, Product } from '../types';
+import { fetchClients } from '../services/clientsService';
+import { Client, Order, Product } from '../types';
 import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/ToastProvider';
-import { format } from 'date-fns';
+import { differenceInCalendarDays, format, isBefore, parseISO, setYear, startOfDay } from 'date-fns';
 
 const statuses = [
   { value: 'all', label: 'Все статусы' },
@@ -21,6 +22,9 @@ type OrderFormState = {
   customerFirstName: string;
   customerLastName: string;
   customerInstagram: string;
+  customerPhone: string;
+  customerBirthDate: string;
+  clientId?: number | null;
   deliveryAddress: string;
   status: Order['status'];
   items: Array<{ productId: number; quantity: number; price: number; discount: number }>;
@@ -31,6 +35,9 @@ const defaultForm: OrderFormState = {
   customerFirstName: '',
   customerLastName: '',
   customerInstagram: '',
+  customerPhone: '',
+  customerBirthDate: '',
+  clientId: null,
   deliveryAddress: '',
   status: 'new',
   items: []
@@ -39,16 +46,58 @@ const defaultForm: OrderFormState = {
 const OrdersPage: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<(typeof statuses)[number]['value']>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formState, setFormState] = useState<OrderFormState>(defaultForm);
   const { showToast } = useToast();
 
+  const formatPhoneDisplay = (value?: string | null) => {
+    if (!value) return '';
+    const digits = value.replace(/\D/g, '');
+    if (digits.length === 0) {
+      return value;
+    }
+    if (digits.length === 12 && digits.startsWith('38')) {
+      return `+${digits}`;
+    }
+    if (digits.length === 10) {
+      return `+38${digits}`;
+    }
+    if (value.startsWith('+')) {
+      return value;
+    }
+    return `+${digits}`;
+  };
+
+  const formatBirthDate = (value?: string | null) => {
+    if (!value) return '';
+    try {
+      return format(parseISO(value), 'dd.MM');
+    } catch (error) {
+      return '';
+    }
+  };
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return '';
+    try {
+      return format(new Date(value), 'dd.MM.yyyy');
+    } catch (error) {
+      return '';
+    }
+  };
+
   const loadData = async () => {
-    const [ordersData, productsData] = await Promise.all([fetchOrders(), fetchProducts()]);
+    const [ordersData, productsData, clientsData] = await Promise.all([
+      fetchOrders(),
+      fetchProducts(),
+      fetchClients()
+    ]);
     setOrders(ordersData);
     setProducts(productsData);
+    setClients(clientsData);
   };
 
   useEffect(() => {
@@ -56,16 +105,91 @@ const OrdersPage: React.FC = () => {
   }, []);
 
   const filteredOrders = useMemo(() => {
+    const searchLower = search.toLowerCase().trim();
+    const digitsSearch = search.replace(/\D/g, '');
+    const hasSearch = searchLower.length > 0 || digitsSearch.length > 0;
+
     return orders.filter((order) => {
-      const matchesSearch =
-        order.order_number?.toLowerCase().includes(search.toLowerCase()) ||
-        `${order.customer_first_name} ${order.customer_last_name}`
-          .toLowerCase()
-          .includes(search.toLowerCase());
+      const matchesSearch = !hasSearch
+        ? true
+        : order.order_number?.toLowerCase().includes(searchLower) ||
+          `${order.customer_first_name} ${order.customer_last_name}`
+            .toLowerCase()
+            .includes(searchLower) ||
+          (order.customer_instagram ?? '').toLowerCase().includes(searchLower) ||
+          (digitsSearch.length >= 3 && (order.customer_phone ?? '').includes(digitsSearch));
       const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [orders, search, statusFilter]);
+
+  const matchedClient = useMemo(() => {
+    const instagram = formState.customerInstagram.trim().toLowerCase();
+    const phoneDigits = formState.customerPhone.replace(/\D/g, '');
+    if (!instagram && phoneDigits.length < 3) {
+      return undefined;
+    }
+
+    return clients.find((client) => {
+      const clientInstagram = (client.instagram ?? '').toLowerCase();
+      const clientPhoneDigits = (client.phone ?? '').replace(/\D/g, '');
+      return (instagram && clientInstagram === instagram) || (phoneDigits && clientPhoneDigits === phoneDigits);
+    });
+  }, [clients, formState.customerInstagram, formState.customerPhone]);
+
+  const activeClient = useMemo(() => {
+    if (formState.clientId) {
+      const existing = clients.find((client) => client.id === formState.clientId);
+      if (existing) {
+        return existing;
+      }
+    }
+    return matchedClient;
+  }, [clients, formState.clientId, matchedClient]);
+
+  const upcomingBirthdayInfo = useMemo(() => {
+    if (!activeClient?.birthDate) {
+      return null;
+    }
+
+    try {
+      const birth = parseISO(activeClient.birthDate);
+      const today = startOfDay(new Date());
+      let next = setYear(birth, today.getFullYear());
+      if (isBefore(next, today)) {
+        next = setYear(next, next.getFullYear() + 1);
+      }
+      const daysUntil = differenceInCalendarDays(next, today);
+      return { next, daysUntil };
+    } catch (error) {
+      return null;
+    }
+  }, [activeClient]);
+
+  useEffect(() => {
+    if (!isModalOpen || !matchedClient) {
+      return;
+    }
+
+    setFormState((prev) => ({
+      ...prev,
+      clientId: matchedClient.id,
+      customerFirstName: prev.customerFirstName || matchedClient.firstName || '',
+      customerLastName: prev.customerLastName || matchedClient.lastName || '',
+      customerPhone: prev.customerPhone || formatPhoneDisplay(matchedClient.phone) || '',
+      customerBirthDate: prev.customerBirthDate || matchedClient.birthDate || ''
+    }));
+  }, [isModalOpen, matchedClient]);
+
+  useEffect(() => {
+    if (!isModalOpen || formState.id) {
+      return;
+    }
+
+    if (!matchedClient && formState.clientId) {
+      setFormState((prev) => ({ ...prev, clientId: null }));
+    }
+  }, [formState.clientId, formState.id, isModalOpen, matchedClient]);
 
   const openModal = async (order?: Order) => {
     if (order) {
@@ -75,6 +199,9 @@ const OrdersPage: React.FC = () => {
         customerFirstName: order.customer_first_name,
         customerLastName: order.customer_last_name,
         customerInstagram: order.customer_instagram ?? '',
+        customerPhone: formatPhoneDisplay(order.customer_phone) ?? '',
+        customerBirthDate: order.customer_birth_date ?? '',
+        clientId: order.client_id ?? null,
         deliveryAddress: order.delivery_address ?? '',
         status: order.status,
         items: order.items.map((item) => ({
@@ -145,6 +272,7 @@ const OrdersPage: React.FC = () => {
     try {
       const payload = {
         ...formState,
+        clientId: formState.clientId ?? matchedClient?.id ?? null,
         totalAmount,
         items: formState.items.filter((item) => item.productId)
       };
@@ -192,7 +320,7 @@ const OrdersPage: React.FC = () => {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Пошук по номеру або клієнту"
+              placeholder="Пошук по номеру, клієнту чи телефону"
               className="w-full bg-transparent text-sm outline-none"
             />
           </label>
@@ -237,12 +365,18 @@ const OrdersPage: React.FC = () => {
                       {order.customer_instagram && (
                         <span className="text-xs text-purple-500">@{order.customer_instagram}</span>
                       )}
+                      {order.customer_phone && (
+                        <span className="text-xs text-slate-500">{formatPhoneDisplay(order.customer_phone)}</span>
+                      )}
+                      {order.customer_birth_date && (
+                        <span className="text-xs text-rose-400">🎂 {formatBirthDate(order.customer_birth_date)}</span>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-slate-500">{order.items.reduce((acc, item) => acc + item.quantity, 0)} шт</td>
                   <td className="px-4 py-3 font-semibold text-slate-800">{order.total_amount.toLocaleString()} ₴</td>
                   <td className="px-4 py-3 text-slate-500">{statuses.find((status) => status.value === order.status)?.label}</td>
-                  <td className="px-4 py-3 text-slate-500">{format(new Date(order.created_at), 'dd.MM.yyyy')}</td>
+                  <td className="px-4 py-3 text-slate-500">{formatDate(order.created_at)}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-2">
                       <button
@@ -301,6 +435,38 @@ const OrdersPage: React.FC = () => {
                 </label>
               </div>
 
+              {activeClient && (
+                <div className="rounded-2xl border border-purple-100 bg-purple-50/60 p-4 text-sm text-purple-700">
+                  <div className="flex items-start gap-3">
+                    <UserRound className="mt-1 h-4 w-4 text-purple-500" />
+                    <div className="space-y-1">
+                      <div className="font-semibold text-purple-700">
+                        {activeClient.firstName}
+                        {activeClient.lastName ? ` ${activeClient.lastName}` : ''}
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs text-purple-600">
+                        {activeClient.instagram && <span>@{activeClient.instagram}</span>}
+                        {activeClient.phone && <span>{formatPhoneDisplay(activeClient.phone)}</span>}
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-xs text-purple-500">
+                        <span>{activeClient.totalOrders} замовлень</span>
+                        {activeClient.lastOrderAt && <span>Останнє: {formatDate(activeClient.lastOrderAt)}</span>}
+                      </div>
+                      {upcomingBirthdayInfo && upcomingBirthdayInfo.daysUntil <= 30 && (
+                        <div className="flex items-center gap-1 text-xs font-medium text-pink-500">
+                          <Gift className="h-3.5 w-3.5" /> День народження{' '}
+                          {upcomingBirthdayInfo.daysUntil === 0
+                            ? 'сьогодні'
+                            : `через ${upcomingBirthdayInfo.daysUntil} ${
+                                upcomingBirthdayInfo.daysUntil === 1 ? 'день' : 'дні'
+                              }`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Ім'я</span>
@@ -319,6 +485,41 @@ const OrdersPage: React.FC = () => {
                     className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
                     required
                   />
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Телефон</span>
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm focus-within:border-purple-400 focus-within:ring-2 focus-within:ring-purple-200">
+                    <Phone className="h-4 w-4 text-purple-500" />
+                    <input
+                      type="tel"
+                      value={formState.customerPhone}
+                      onChange={(event) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          customerPhone: event.target.value.replace(/[^0-9+]/g, '')
+                        }))
+                      }
+                      placeholder="+380..."
+                      className="w-full bg-transparent outline-none"
+                    />
+                  </div>
+                </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Дата народження</span>
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm focus-within:border-purple-400 focus-within:ring-2 focus-within:ring-purple-200">
+                    <Calendar className="h-4 w-4 text-purple-500" />
+                    <input
+                      type="date"
+                      value={formState.customerBirthDate}
+                      onChange={(event) =>
+                        setFormState((prev) => ({ ...prev, customerBirthDate: event.target.value }))
+                      }
+                      className="w-full bg-transparent outline-none"
+                    />
+                  </div>
                 </label>
               </div>
 

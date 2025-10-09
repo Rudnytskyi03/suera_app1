@@ -1,4 +1,6 @@
 import type { SaveProductInput } from './services/productsService';
+import type { SaveOrderInput } from './services/ordersService';
+import type { ClientSalesFilters } from './services/clientsService';
 
 declare global {
   interface Window {
@@ -23,9 +25,13 @@ declare global {
       };
       orders: {
         list: () => Promise<any[]>;
-        save: (order: any) => Promise<any>;
+        save: (order: SaveOrderInput) => Promise<any>;
         delete: (id: number) => Promise<{ success: boolean }>;
         generateNumber: () => Promise<string>;
+      };
+      clients: {
+        list: () => Promise<any[]>;
+        salesStats: (filters: ClientSalesFilters) => Promise<any[]>;
       };
       reports: {
         overview: () => Promise<any>;

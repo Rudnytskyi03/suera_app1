@@ -1,8 +1,30 @@
+export type OrderItemInput = {
+  productId: number;
+  quantity: number;
+  price: number;
+  discount: number;
+};
+
+export type SaveOrderInput = {
+  id?: number;
+  orderNumber: string;
+  customerFirstName: string;
+  customerLastName: string;
+  customerInstagram?: string;
+  customerPhone?: string;
+  customerBirthDate?: string;
+  deliveryAddress?: string;
+  status: 'new' | 'shipped' | 'returned' | 'completed';
+  items: OrderItemInput[];
+  totalAmount: number;
+  clientId?: number | null;
+};
+
 export async function fetchOrders() {
   return window.api.orders.list();
 }
 
-export async function saveOrder(order: any) {
+export async function saveOrder(order: SaveOrderInput) {
   return window.api.orders.save(order);
 }
 
