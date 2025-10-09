@@ -1,8 +1,15 @@
+export type FinishedAllocationInput = {
+  component: 'bra' | 'panties' | 'belt' | 'garter';
+  size: string;
+  quantity: number;
+};
+
 export type OrderItemInput = {
   productId: number;
   quantity: number;
   price: number;
   discount: number;
+  allocations: FinishedAllocationInput[];
 };
 
 export type SaveOrderInput = {

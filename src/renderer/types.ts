@@ -58,6 +58,8 @@ export type Product = {
   maxProductionQuantity: number;
 };
 
+export type FinishedComponentType = 'bra' | 'panties' | 'belt' | 'garter';
+
 export type OrderItem = {
   id: number;
   name: string;
@@ -65,6 +67,11 @@ export type OrderItem = {
   quantity: number;
   price: number;
   discount: number;
+  allocations: Array<{
+    component: FinishedComponentType;
+    size: string;
+    quantity: number;
+  }>;
 };
 
 export type Order = {
@@ -86,6 +93,11 @@ export type Order = {
     quantity: number;
     price: number;
     discount: number;
+    allocations: Array<{
+      component: FinishedComponentType;
+      size: string;
+      quantity: number;
+    }>;
   }>;
 };
 
@@ -106,4 +118,32 @@ export type ClientSalesStat = {
   date: string;
   orders: number;
   revenue: number;
+};
+
+export type FinishedInventoryEntry = {
+  id: number;
+  productId: number;
+  productName: string;
+  size: string;
+  components: Record<FinishedComponentType, number>;
+  totalSets: number;
+};
+
+export type FinishedBatch = {
+  id: number;
+  productId: number;
+  productName: string;
+  size: string;
+  sets: number;
+  components: Record<FinishedComponentType, number>;
+  note?: string | null;
+  producedAt: string;
+};
+
+export type FinishedSizeStat = {
+  productId: number;
+  productName: string;
+  component: FinishedComponentType;
+  size: string;
+  sold: number;
 };

@@ -1,15 +1,17 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { BarChart3, LogOut, Menu, Package, ShoppingBag, ShoppingCart, Users, X } from 'lucide-react';
+import { BarChart3, Layers, LogOut, Menu, Package, ShoppingBag, ShoppingCart, Users, X } from 'lucide-react';
 import clsx from 'clsx';
 import MaterialsPage from './Materials';
 import ProductsPage from './Products';
 import OrdersPage from './Orders';
 import ReportsPage from './Reports';
 import ClientsPage from './Clients';
+import FinishedGoodsPage from './FinishedGoods';
 
 const navigation = [
   { id: 'materials', name: 'Материалы', icon: Package },
   { id: 'products', name: 'Товары', icon: ShoppingBag },
+  { id: 'finished', name: 'Отшитые', icon: Layers },
   { id: 'orders', name: 'Заказы', icon: ShoppingCart },
   { id: 'clients', name: 'Клиенты', icon: Users },
   { id: 'reports', name: 'Отчеты', icon: BarChart3 }
@@ -37,6 +39,8 @@ const Dashboard: React.FC<DashboardProps> = ({ email, onLogout }) => {
         return <MaterialsPage key={pageKey} />;
       case 'products':
         return <ProductsPage key={pageKey} />;
+      case 'finished':
+        return <FinishedGoodsPage key={pageKey} />;
       case 'orders':
         return <OrdersPage key={pageKey} />;
       case 'clients':

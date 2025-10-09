@@ -119,6 +119,36 @@ CREATE TABLE IF NOT EXISTS order_items (
   price REAL NOT NULL DEFAULT 0,
   discount REAL NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS finished_inventory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  component TEXT NOT NULL,
+  size TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(product_id, component, size)
+);
+
+CREATE TABLE IF NOT EXISTS finished_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  size TEXT NOT NULL,
+  sets INTEGER NOT NULL DEFAULT 0,
+  bra INTEGER NOT NULL DEFAULT 0,
+  panties INTEGER NOT NULL DEFAULT 0,
+  belt INTEGER NOT NULL DEFAULT 0,
+  garter INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  produced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS order_finished_allocations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+  component TEXT NOT NULL,
+  size TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 0
+);
 `);
 
   ensureColumn(db, 'products', 'materials_cost', 'materials_cost REAL NOT NULL DEFAULT 0');
@@ -130,6 +160,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   ensureColumn(db, 'orders', 'customer_phone', 'customer_phone TEXT');
   ensureColumn(db, 'orders', 'customer_birth_date', 'customer_birth_date TEXT');
   ensureColumn(db, 'orders', 'client_id', 'client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL');
+  ensureFinishedTables(db);
   backfillClientsFromOrders(db);
 
   const defaultUserStmt = db.prepare('SELECT * FROM users WHERE email = ?');
@@ -188,6 +219,62 @@ function ensureProductExpensesTable(db: Database.Database) {
         product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
         label TEXT NOT NULL,
         amount REAL NOT NULL DEFAULT 0
+      );
+    `);
+  }
+}
+
+function ensureFinishedTables(db: Database.Database) {
+  const hasInventoryTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='finished_inventory'")
+    .all() as Array<{ name: string }>;
+
+  if (hasInventoryTable.length === 0) {
+    db.exec(`
+      CREATE TABLE finished_inventory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        component TEXT NOT NULL,
+        size TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(product_id, component, size)
+      );
+    `);
+  }
+
+  const hasBatchesTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='finished_batches'")
+    .all() as Array<{ name: string }>;
+
+  if (hasBatchesTable.length === 0) {
+    db.exec(`
+      CREATE TABLE finished_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        size TEXT NOT NULL,
+        sets INTEGER NOT NULL DEFAULT 0,
+        bra INTEGER NOT NULL DEFAULT 0,
+        panties INTEGER NOT NULL DEFAULT 0,
+        belt INTEGER NOT NULL DEFAULT 0,
+        garter INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        produced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+  }
+
+  const hasAllocationsTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='order_finished_allocations'")
+    .all() as Array<{ name: string }>;
+
+  if (hasAllocationsTable.length === 0) {
+    db.exec(`
+      CREATE TABLE order_finished_allocations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+        component TEXT NOT NULL,
+        size TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0
       );
     `);
   }
@@ -351,4 +438,33 @@ export type ClientRecord = {
   phone: string | null;
   birth_date: string | null;
   created_at: string;
+};
+
+export type FinishedInventoryRecord = {
+  id: number;
+  product_id: number;
+  component: string;
+  size: string;
+  quantity: number;
+};
+
+export type FinishedBatchRecord = {
+  id: number;
+  product_id: number;
+  size: string;
+  sets: number;
+  bra: number;
+  panties: number;
+  belt: number;
+  garter: number;
+  note: string | null;
+  produced_at: string;
+};
+
+export type OrderFinishedAllocationRecord = {
+  id: number;
+  order_item_id: number;
+  component: string;
+  size: string;
+  quantity: number;
 };

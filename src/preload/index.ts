@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('api', {
     delete: (id: number) => ipcRenderer.invoke('materials:delete', id),
     receive: (id: number, receipt: any) => ipcRenderer.invoke('materials:receipt', id, receipt)
   },
+  finished: {
+    list: () => ipcRenderer.invoke('finished:list'),
+    produce: (payload: any) => ipcRenderer.invoke('finished:produce', payload),
+    history: () => ipcRenderer.invoke('finished:history'),
+    sizeStats: () => ipcRenderer.invoke('finished:sizeStats')
+  },
   products: {
     list: () => ipcRenderer.invoke('products:list'),
     save: (product: any) => ipcRenderer.invoke('products:save', product),

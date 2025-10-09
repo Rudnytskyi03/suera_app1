@@ -3,12 +3,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
-import { getDatabase, MaterialRecord, OrderRecord, ProductRecord, ClientRecord } from '../../db/database';
+import {
+  getDatabase,
+  MaterialRecord,
+  OrderRecord,
+  ProductRecord,
+  ClientRecord,
+  FinishedInventoryRecord,
+  FinishedBatchRecord
+} from '../../db/database';
 
 const PHOTO_DIRECTORIES = {
   product: 'product-photos',
   material: 'material-photos'
 } as const;
+
+const FINISHED_COMPONENTS = ['bra', 'panties', 'belt', 'garter'] as const;
+
+type FinishedComponent = (typeof FINISHED_COMPONENTS)[number];
+
+const FINISHED_COMPONENT_LABELS: Record<FinishedComponent, string> = {
+  bra: 'бра',
+  panties: 'трусики',
+  belt: 'пояс',
+  garter: 'гартер'
+};
 
 type PhotoScope = keyof typeof PHOTO_DIRECTORIES;
 
@@ -57,6 +76,104 @@ function deleteStoredPhoto(storedPath: string | null | undefined, scope: PhotoSc
     } catch (error) {
       // Ignore file deletion errors to avoid crashing the flow.
     }
+  }
+}
+
+function normalizeFinishedSize(size: string) {
+  const trimmed = (size ?? '').trim();
+  return trimmed.length > 0 ? trimmed.toUpperCase() : 'UNSIZED';
+}
+
+function ensureFinishedComponent(component: string): FinishedComponent {
+  if (FINISHED_COMPONENTS.includes(component as FinishedComponent)) {
+    return component as FinishedComponent;
+  }
+  throw new Error('Невідома категорія готового виробу');
+}
+
+function applyFinishedInventoryDelta(
+  db: ReturnType<typeof getDatabase>,
+  productId: number,
+  component: FinishedComponent,
+  size: string,
+  delta: number
+) {
+  const normalizedSize = normalizeFinishedSize(size);
+  const existing = db
+    .prepare('SELECT id, quantity FROM finished_inventory WHERE product_id = ? AND component = ? AND size = ?')
+    .get(productId, component, normalizedSize) as { id: number; quantity: number } | undefined;
+
+  if (existing) {
+    const nextQuantity = existing.quantity + delta;
+    if (nextQuantity < 0) {
+      throw new Error(
+        `Недостатньо готових виробів (${FINISHED_COMPONENT_LABELS[component]} ${normalizedSize}) для товару`
+      );
+    }
+    db.prepare('UPDATE finished_inventory SET quantity = ? WHERE id = ?').run(nextQuantity, existing.id);
+  } else {
+    if (delta < 0) {
+      throw new Error(
+        `На складі немає готових виробів (${FINISHED_COMPONENT_LABELS[component]} ${normalizedSize}) для списання`
+      );
+    }
+    db
+      .prepare(
+        'INSERT INTO finished_inventory (product_id, component, size, quantity) VALUES (?, ?, ?, ?)' as const
+      )
+      .run(productId, component, normalizedSize, delta);
+  }
+}
+
+function computeTotalSets(components: Record<FinishedComponent, number>) {
+  const counts = FINISHED_COMPONENTS.map((component) => components[component] ?? 0).filter((value) => value > 0);
+  if (counts.length === 0) {
+    return 0;
+  }
+  return Math.min(...counts);
+}
+
+type AllocationPayload = {
+  component: string;
+  size: string;
+  quantity: number;
+};
+
+function groupAllocationsByComponent(allocations: AllocationPayload[]) {
+  const grouped: Record<FinishedComponent, { total: number; bySize: Record<string, number> }> = {
+    bra: { total: 0, bySize: {} },
+    panties: { total: 0, bySize: {} },
+    belt: { total: 0, bySize: {} },
+    garter: { total: 0, bySize: {} }
+  };
+
+  for (const allocation of allocations) {
+    const component = ensureFinishedComponent(allocation.component);
+    const normalizedSize = normalizeFinishedSize(allocation.size);
+    const amount = Math.max(0, Math.floor(allocation.quantity ?? 0));
+    if (amount === 0) {
+      continue;
+    }
+    grouped[component].total += amount;
+    grouped[component].bySize[normalizedSize] = (grouped[component].bySize[normalizedSize] ?? 0) + amount;
+  }
+
+  return grouped;
+}
+
+function restoreFinishedInventoryForOrder(db: ReturnType<typeof getDatabase>, orderId: number) {
+  const rows = db
+    .prepare(
+      `SELECT oi.product_id, ofa.component, ofa.size, ofa.quantity
+         FROM order_finished_allocations ofa
+         JOIN order_items oi ON oi.id = ofa.order_item_id
+        WHERE oi.order_id = ?`
+    )
+    .all(orderId) as Array<{ product_id: number; component: string; size: string; quantity: number }>;
+
+  for (const row of rows) {
+    const component = ensureFinishedComponent(row.component);
+    applyFinishedInventoryDelta(db, row.product_id, component, row.size, row.quantity);
   }
 }
 
@@ -304,6 +421,217 @@ export function registerIpcHandlers() {
       return mapMaterialRecord(updated);
     }
   );
+
+  ipcMain.handle('finished:list', () => {
+    const rows = db
+      .prepare(
+        `SELECT fi.*, p.name as product_name
+           FROM finished_inventory fi
+           JOIN products p ON p.id = fi.product_id
+          ORDER BY LOWER(p.name), fi.size`
+      )
+      .all() as Array<FinishedInventoryRecord & { product_name: string }>;
+
+    const grouped = new Map<
+      string,
+      {
+        productId: number;
+        productName: string;
+        size: string;
+        components: Record<FinishedComponent, number>;
+      }
+    >();
+
+    for (const row of rows) {
+      const component = ensureFinishedComponent(row.component);
+      const normalizedSize = normalizeFinishedSize(row.size);
+      const key = `${row.product_id}:${normalizedSize}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          productId: row.product_id,
+          productName: row.product_name,
+          size: normalizedSize,
+          components: { bra: 0, panties: 0, belt: 0, garter: 0 }
+        });
+      }
+      const entry = grouped.get(key)!;
+      entry.components[component] = row.quantity;
+    }
+
+    let counter = 1;
+    return Array.from(grouped.values()).map((entry) => ({
+      id: counter++,
+      productId: entry.productId,
+      productName: entry.productName,
+      size: entry.size,
+      components: entry.components,
+      totalSets: computeTotalSets(entry.components)
+    }));
+  });
+
+  ipcMain.handle('finished:produce', (_event, payload) => {
+    const { productId, size, components, sets, producedAt, note } = payload as {
+      productId: number;
+      size: string;
+      components?: Partial<Record<string, number>>;
+      sets?: number;
+      producedAt?: string;
+      note?: string;
+    };
+
+    if (!productId) {
+      throw new Error('Оберіть товар для списання матеріалів');
+    }
+
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as ProductRecord | undefined;
+    if (!product) {
+      throw new Error('Товар не знайдено');
+    }
+
+    const normalizedSize = normalizeFinishedSize(size);
+    const normalizedComponents: Record<FinishedComponent, number> = {
+      bra: 0,
+      panties: 0,
+      belt: 0,
+      garter: 0
+    };
+
+    for (const component of FINISHED_COMPONENTS) {
+      const value = components?.[component];
+      normalizedComponents[component] = Number.isFinite(value) ? Math.max(0, Math.floor(Number(value))) : 0;
+    }
+
+    const totalPieces = FINISHED_COMPONENTS.reduce((acc, component) => acc + normalizedComponents[component], 0);
+    if (totalPieces === 0) {
+      throw new Error('Вкажіть кількість хоча б для одного елементу комплекту');
+    }
+
+    const setsToProduceCandidate = Number.isFinite(sets) ? Math.max(0, Math.floor(Number(sets))) : 0;
+    const inferredSets = computeTotalSets(normalizedComponents);
+    const setsToProduce = setsToProduceCandidate > 0 ? setsToProduceCandidate : inferredSets;
+
+    if (setsToProduce <= 0) {
+      throw new Error('Кількість комплектів має бути більшою за нуль');
+    }
+
+    const producedTimestamp = (() => {
+      if (!producedAt) {
+        return new Date();
+      }
+      const parsed = new Date(producedAt);
+      return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    })();
+
+    const transaction = db.transaction(() => {
+      const materials = db
+        .prepare(
+          `SELECT pm.material_id, pm.quantity, m.quantity as available_quantity, m.name as material_name
+             FROM product_materials pm
+             JOIN materials m ON m.id = pm.material_id
+            WHERE pm.product_id = ?`
+        )
+        .all(productId) as Array<{
+          material_id: number;
+          quantity: number;
+          available_quantity: number;
+          material_name: string;
+        }>;
+
+      for (const material of materials) {
+        const required = Number(material.quantity) * setsToProduce;
+        const available = Number(material.available_quantity);
+        if (required > 0 && available < required) {
+          throw new Error(
+            `Недостатньо матеріалу "${material.material_name}". Доступно ${available.toFixed(2)}, потрібно ${required.toFixed(2)}`
+          );
+        }
+      }
+
+      for (const material of materials) {
+        const required = Number(material.quantity) * setsToProduce;
+        if (required > 0) {
+          db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(required, material.material_id);
+        }
+      }
+
+      db.prepare(
+        `INSERT INTO finished_batches (product_id, size, sets, bra, panties, belt, garter, note, produced_at)
+         VALUES (@productId, @size, @sets, @bra, @panties, @belt, @garter, @note, @producedAt)`
+      ).run({
+        productId,
+        size: normalizedSize,
+        sets: setsToProduce,
+        bra: normalizedComponents.bra,
+        panties: normalizedComponents.panties,
+        belt: normalizedComponents.belt,
+        garter: normalizedComponents.garter,
+        note: note?.trim() || null,
+        producedAt: producedTimestamp.toISOString()
+      });
+
+      for (const component of FINISHED_COMPONENTS) {
+        const quantity = normalizedComponents[component];
+        if (quantity > 0) {
+          applyFinishedInventoryDelta(db, productId, component, normalizedSize, quantity);
+        }
+      }
+    });
+
+    transaction();
+
+    return { success: true };
+  });
+
+  ipcMain.handle('finished:history', () => {
+    const rows = db
+      .prepare(
+        `SELECT fb.*, p.name as product_name
+           FROM finished_batches fb
+           JOIN products p ON p.id = fb.product_id
+          ORDER BY datetime(fb.produced_at) DESC
+          LIMIT 200`
+      )
+      .all() as Array<FinishedBatchRecord & { product_name: string }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      productId: row.product_id,
+      productName: row.product_name,
+      size: normalizeFinishedSize(row.size),
+      sets: row.sets,
+      components: {
+        bra: row.bra,
+        panties: row.panties,
+        belt: row.belt,
+        garter: row.garter
+      },
+      note: row.note,
+      producedAt: row.produced_at
+    }));
+  });
+
+  ipcMain.handle('finished:sizeStats', () => {
+    const rows = db
+      .prepare(
+        `SELECT p.id as product_id, p.name as product_name, ofa.component, ofa.size, SUM(ofa.quantity) as sold
+           FROM order_finished_allocations ofa
+           JOIN order_items oi ON oi.id = ofa.order_item_id
+           JOIN orders o ON o.id = oi.order_id
+           JOIN products p ON p.id = oi.product_id
+          WHERE o.status = 'completed'
+          GROUP BY p.id, p.name, ofa.component, ofa.size
+          ORDER BY sold DESC`
+      )
+      .all() as Array<{ product_id: number; product_name: string; component: string; size: string; sold: number }>;
+
+    return rows.map((row) => ({
+      productId: row.product_id,
+      productName: row.product_name,
+      component: ensureFinishedComponent(row.component),
+      size: normalizeFinishedSize(row.size),
+      sold: row.sold ?? 0
+    }));
+  });
 
   ipcMain.handle('materials:delete', (_event, id: number) => {
     const existing = db.prepare('SELECT photo FROM materials WHERE id = ?').get(id) as { photo?: string | null } | undefined;
@@ -624,6 +952,9 @@ export function registerIpcHandlers() {
     const itemsStmt = db.prepare(
       'SELECT oi.*, p.name as product_name FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE order_id = ?'
     );
+    const allocationsStmt = db.prepare(
+      'SELECT component, size, quantity FROM order_finished_allocations WHERE order_item_id = ?'
+    );
 
     return orders.map((order) => ({
       ...order,
@@ -632,7 +963,14 @@ export function registerIpcHandlers() {
         name: row.product_name,
         quantity: row.quantity,
         price: row.price,
-        discount: row.discount
+        discount: row.discount,
+        allocations: allocationsStmt
+          .all(row.id)
+          .map((allocation: any) => ({
+            component: ensureFinishedComponent(allocation.component),
+            size: normalizeFinishedSize(allocation.size),
+            quantity: allocation.quantity
+          }))
       }))
     }));
   });
@@ -651,6 +989,7 @@ export function registerIpcHandlers() {
       status,
       clientId: payloadClientId
     } = payload;
+
     const trimmedFirstName = (customerFirstName ?? '').trim();
     const trimmedLastName = (customerLastName ?? '').trim();
     const sanitizedInstagram = sanitizeInstagram(customerInstagram);
@@ -658,121 +997,227 @@ export function registerIpcHandlers() {
     const normalizedBirthDate =
       typeof customerBirthDate === 'string' && customerBirthDate.length > 0 ? customerBirthDate : null;
 
-    let clientId: number | null = payloadClientId ?? null;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('Додайте хоча б один товар до замовлення');
+    }
 
-    if (clientId) {
-      const existingClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId) as
-        | ClientRecord
-        | undefined;
-      if (existingClient) {
-        updateClientStmt.run({
-          id: existingClient.id,
-          instagram: sanitizedInstagram ?? existingClient.instagram,
-          firstName: trimmedFirstName || existingClient.first_name,
-          lastName: trimmedLastName || existingClient.last_name,
-          phone: normalizedPhone ?? existingClient.phone,
-          birthDate: normalizedBirthDate ?? existingClient.birth_date
-        });
-      } else {
-        clientId = null;
+    const normalizedItems = items.map((item: any, index: number) => {
+      const productId = Number(item.productId);
+      if (!Number.isInteger(productId) || productId <= 0) {
+        throw new Error(`Некоректний товар у позиції ${index + 1}`);
       }
-    }
-
-    if (!clientId && (sanitizedInstagram || normalizedPhone)) {
-      const existing = findClientStmt.get({ instagram: sanitizedInstagram, phone: normalizedPhone }) as
-        | ClientRecord
-        | undefined;
-      if (existing) {
-        clientId = existing.id;
-        updateClientStmt.run({
-          id: existing.id,
-          instagram: sanitizedInstagram ?? existing.instagram,
-          firstName: trimmedFirstName || existing.first_name,
-          lastName: trimmedLastName || existing.last_name,
-          phone: normalizedPhone ?? existing.phone,
-          birthDate: normalizedBirthDate ?? existing.birth_date
-        });
+      const quantity = Math.max(0, Math.floor(Number(item.quantity)));
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Кількість у позиції ${index + 1} повинна бути більшою за 0`);
       }
-    }
+      const price = Number(item.price) || 0;
+      const discount = Number(item.discount) || 0;
+      const allocationPayloads: AllocationPayload[] = (Array.isArray(item.allocations) ? item.allocations : []).map(
+        (allocation: any) => {
+          if (!allocation?.size || !allocation.size.trim()) {
+            throw new Error('Оберіть розмір для кожного елементу комплекту');
+          }
+          const component = allocation.component;
+          const quantityValue = Math.max(0, Math.floor(Number(allocation.quantity)));
+          if (!Number.isFinite(quantityValue) || quantityValue <= 0) {
+            throw new Error('Кількість готових виробів повинна бути більшою за 0');
+          }
+          return {
+            component,
+            size: allocation.size,
+            quantity: quantityValue
+          };
+        }
+      );
 
-    if (!clientId && (trimmedFirstName || trimmedLastName || sanitizedInstagram || normalizedPhone)) {
-      const inserted = insertClientStmt.run({
-        instagram: sanitizedInstagram ?? null,
-        firstName: trimmedFirstName || 'Клієнт',
-        lastName: trimmedLastName || null,
-        phone: normalizedPhone ?? null,
-        birthDate: normalizedBirthDate ?? null
-      });
-      clientId = Number(inserted.lastInsertRowid);
-    }
+      if (allocationPayloads.length === 0) {
+        throw new Error('Розподіліть готові вироби для кожного товару');
+      }
 
-    const totalAmount = items.reduce(
-      (acc: number, item: any) => acc + (item.price - item.discount) * item.quantity,
+      const grouped = groupAllocationsByComponent(allocationPayloads);
+
+      for (const component of FINISHED_COMPONENTS) {
+        const total = grouped[component].total;
+        if (total !== quantity) {
+          throw new Error(
+            `Для ${FINISHED_COMPONENT_LABELS[component]} потрібно розподілити ${quantity} од. (зараз ${total})`
+          );
+        }
+        for (const sizeKey of Object.keys(grouped[component].bySize)) {
+          if (sizeKey === 'UNSIZED') {
+            throw new Error('Оберіть розмір для кожного елементу комплекту');
+          }
+        }
+      }
+
+      return {
+        productId,
+        quantity,
+        price,
+        discount,
+        allocations: grouped
+      };
+    });
+
+    const totalAmount = normalizedItems.reduce(
+      (acc: number, item) => acc + (item.price - item.discount) * item.quantity,
       0
     );
 
-    if (id) {
-      db.prepare(
-        `UPDATE orders SET order_number=@orderNumber, customer_first_name=@customerFirstName, customer_last_name=@customerLastName,
-         customer_instagram=@customerInstagram, customer_phone=@customerPhone, customer_birth_date=@customerBirthDate,
-         client_id=@clientId, delivery_address=@deliveryAddress, total_amount=@totalAmount, status=@status WHERE id=@id`
-      ).run({
-        id,
-        orderNumber,
-        customerFirstName: trimmedFirstName,
-        customerLastName: trimmedLastName,
-        customerInstagram: sanitizedInstagram ?? null,
-        customerPhone: normalizedPhone ?? null,
-        customerBirthDate: normalizedBirthDate,
-        clientId,
-        deliveryAddress,
-        totalAmount,
-        status
-      });
-      db.prepare('DELETE FROM order_items WHERE order_id = ?').run(id);
-      const insertItem = db.prepare(
-        'INSERT INTO order_items (order_id, product_id, quantity, price, discount) VALUES (?, ?, ?, ?, ?)'
-      );
-      const txn = db.transaction((orderItems: any[]) => {
-        for (const item of orderItems) {
-          insertItem.run(id, item.productId, item.quantity, item.price, item.discount);
-        }
-      });
-      txn(items);
-      return { id, totalAmount };
-    } else {
-      const insert = db.prepare(
-        `INSERT INTO orders (order_number, customer_first_name, customer_last_name, customer_instagram, customer_phone, customer_birth_date, client_id, delivery_address, total_amount, status)
-         VALUES (@orderNumber, @customerFirstName, @customerLastName, @customerInstagram, @customerPhone, @customerBirthDate, @clientId, @deliveryAddress, @totalAmount, @status)`
-      );
-      const result = insert.run({
-        orderNumber,
-        customerFirstName: trimmedFirstName || 'Клієнт',
-        customerLastName: trimmedLastName || '',
-        customerInstagram: sanitizedInstagram ?? null,
-        customerPhone: normalizedPhone ?? null,
-        customerBirthDate: normalizedBirthDate,
-        clientId,
-        deliveryAddress,
-        totalAmount,
-        status
-      });
-      const orderId = Number(result.lastInsertRowid);
-      const insertItem = db.prepare(
-        'INSERT INTO order_items (order_id, product_id, quantity, price, discount) VALUES (?, ?, ?, ?, ?)'
-      );
-      const txn = db.transaction((orderItems: any[]) => {
-        for (const item of orderItems) {
-          insertItem.run(orderId, item.productId, item.quantity, item.price, item.discount);
-        }
-      });
-      txn(items);
-      return { id: orderId, totalAmount };
-    }
-  });
+    const execute = db.transaction(() => {
+      let clientId: number | null = payloadClientId ?? null;
 
+      if (clientId) {
+        const existingClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId) as
+          | ClientRecord
+          | undefined;
+        if (existingClient) {
+          updateClientStmt.run({
+            id: existingClient.id,
+            instagram: sanitizedInstagram ?? existingClient.instagram,
+            firstName: trimmedFirstName || existingClient.first_name,
+            lastName: trimmedLastName || existingClient.last_name,
+            phone: normalizedPhone ?? existingClient.phone,
+            birthDate: normalizedBirthDate ?? existingClient.birth_date
+          });
+        } else {
+          clientId = null;
+        }
+      }
+
+      if (!clientId && (sanitizedInstagram || normalizedPhone)) {
+        const existing = findClientStmt.get({ instagram: sanitizedInstagram, phone: normalizedPhone }) as
+          | ClientRecord
+          | undefined;
+        if (existing) {
+          clientId = existing.id;
+          updateClientStmt.run({
+            id: existing.id,
+            instagram: sanitizedInstagram ?? existing.instagram,
+            firstName: trimmedFirstName || existing.first_name,
+            lastName: trimmedLastName || existing.last_name,
+            phone: normalizedPhone ?? existing.phone,
+            birthDate: normalizedBirthDate ?? existing.birth_date
+          });
+        }
+      }
+
+      if (!clientId && (trimmedFirstName || trimmedLastName || sanitizedInstagram || normalizedPhone)) {
+        const inserted = insertClientStmt.run({
+          instagram: sanitizedInstagram ?? null,
+          firstName: trimmedFirstName || 'Клієнт',
+          lastName: trimmedLastName || null,
+          phone: normalizedPhone ?? null,
+          birthDate: normalizedBirthDate ?? null
+        });
+        clientId = Number(inserted.lastInsertRowid);
+      }
+
+      const inventoryLookup = db.prepare(
+        'SELECT quantity FROM finished_inventory WHERE product_id = ? AND component = ? AND size = ?'
+      );
+      const insertItemStmt = db.prepare(
+        'INSERT INTO order_items (order_id, product_id, quantity, price, discount) VALUES (?, ?, ?, ?, ?)'
+      );
+      const insertAllocationStmt = db.prepare(
+        'INSERT INTO order_finished_allocations (order_item_id, component, size, quantity) VALUES (?, ?, ?, ?)'
+      );
+
+      const ensureInventoryAvailability = () => {
+        for (const item of normalizedItems) {
+          for (const component of FINISHED_COMPONENTS) {
+            const entries = Object.entries(item.allocations[component].bySize);
+            for (const [sizeKey, amount] of entries) {
+              if (amount <= 0) continue;
+              const row = inventoryLookup.get(item.productId, component, sizeKey) as { quantity: number } | undefined;
+              const available = row?.quantity ?? 0;
+              if (available < amount) {
+                throw new Error(
+                  `Недостатньо готових виробів (${FINISHED_COMPONENT_LABELS[component]} ${sizeKey}) на складі`
+                );
+              }
+            }
+          }
+        }
+      };
+
+      let orderId = id ?? null;
+
+      if (orderId) {
+        restoreFinishedInventoryForOrder(db, orderId);
+        ensureInventoryAvailability();
+        db.prepare(
+          `UPDATE orders SET order_number=@orderNumber, customer_first_name=@customerFirstName, customer_last_name=@customerLastName,
+             customer_instagram=@customerInstagram, customer_phone=@customerPhone, customer_birth_date=@customerBirthDate,
+             client_id=@clientId, delivery_address=@deliveryAddress, total_amount=@totalAmount, status=@status WHERE id=@id`
+        ).run({
+          id: orderId,
+          orderNumber,
+          customerFirstName: trimmedFirstName,
+          customerLastName: trimmedLastName,
+          customerInstagram: sanitizedInstagram ?? null,
+          customerPhone: normalizedPhone ?? null,
+          customerBirthDate: normalizedBirthDate,
+          clientId,
+          deliveryAddress,
+          totalAmount,
+          status
+        });
+
+        db.prepare('DELETE FROM order_items WHERE order_id = ?').run(orderId);
+      } else {
+        ensureInventoryAvailability();
+        const insert = db.prepare(
+          `INSERT INTO orders (order_number, customer_first_name, customer_last_name, customer_instagram, customer_phone, customer_birth_date, client_id, delivery_address, total_amount, status)
+           VALUES (@orderNumber, @customerFirstName, @customerLastName, @customerInstagram, @customerPhone, @customerBirthDate, @clientId, @deliveryAddress, @totalAmount, @status)`
+        );
+        const result = insert.run({
+          orderNumber,
+          customerFirstName: trimmedFirstName || 'Клієнт',
+          customerLastName: trimmedLastName || '',
+          customerInstagram: sanitizedInstagram ?? null,
+          customerPhone: normalizedPhone ?? null,
+          customerBirthDate: normalizedBirthDate,
+          clientId,
+          deliveryAddress,
+          totalAmount,
+          status
+        });
+        orderId = Number(result.lastInsertRowid);
+      }
+
+      if (!orderId) {
+        throw new Error('Не вдалося зберегти замовлення');
+      }
+
+      for (const item of normalizedItems) {
+        const inserted = insertItemStmt.run(orderId, item.productId, item.quantity, item.price, item.discount);
+        const orderItemId = Number(inserted.lastInsertRowid);
+        for (const component of FINISHED_COMPONENTS) {
+          const entries = Object.entries(item.allocations[component].bySize);
+          for (const [sizeKey, amount] of entries) {
+            if (amount <= 0) continue;
+            applyFinishedInventoryDelta(db, item.productId, component, sizeKey, -amount);
+            insertAllocationStmt.run(orderItemId, component, sizeKey, amount);
+          }
+        }
+      }
+
+      return { id: orderId, totalAmount };
+    });
+
+    return execute();
+  });
   ipcMain.handle('orders:delete', (_event, id: number) => {
-    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+    const orderId = Number(id);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return { success: true };
+    }
+    const txn = db.transaction((targetId: number) => {
+      restoreFinishedInventoryForOrder(db, targetId);
+      db.prepare('DELETE FROM orders WHERE id = ?').run(targetId);
+    });
+    txn(orderId);
     return { success: true };
   });
 

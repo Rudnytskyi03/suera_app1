@@ -3,7 +3,8 @@ import { Calendar, FilePlus2, Filter, Gift, PackageSearch, Phone, Search, Shoppi
 import { fetchOrders, saveOrder, deleteOrder, generateOrderNumber } from '../services/ordersService';
 import { fetchProducts } from '../services/productsService';
 import { fetchClients } from '../services/clientsService';
-import { Client, Order, Product } from '../types';
+import { fetchFinishedInventory } from '../services/finishedGoodsService';
+import { Client, FinishedComponentType, FinishedInventoryEntry, Order, Product } from '../types';
 import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/ToastProvider';
 import { differenceInCalendarDays, format, isBefore, parseISO, setYear, startOfDay } from 'date-fns';
@@ -16,6 +17,101 @@ const statuses = [
   { value: 'completed', label: '✅ Виконано' }
 ] as const;
 
+const FINISHED_COMPONENTS: FinishedComponentType[] = ['bra', 'panties', 'belt', 'garter'];
+
+const COMPONENT_LABELS: Record<FinishedComponentType, string> = {
+  bra: 'Бра',
+  panties: 'Трусики',
+  belt: 'Пояс',
+  garter: 'Гартер'
+};
+
+type ComponentAllocation = {
+  size: string;
+  quantity: number;
+};
+
+const createAllocationTemplate = (quantity: number): Record<FinishedComponentType, ComponentAllocation[]> => ({
+  bra: [{ size: '', quantity }],
+  panties: [{ size: '', quantity }],
+  belt: [{ size: '', quantity }],
+  garter: [{ size: '', quantity }]
+});
+
+const rebalanceAllocations = (
+  allocations: ComponentAllocation[],
+  targetQuantity: number,
+  preferredIndex = 0
+): ComponentAllocation[] => {
+  const sanitized = allocations.map((allocation) => ({
+    size: allocation.size,
+    quantity: Math.max(0, Math.floor(allocation.quantity))
+  }));
+
+  if (sanitized.length === 0) {
+    return targetQuantity > 0 ? [{ size: '', quantity: targetQuantity }] : [];
+  }
+
+  let total = sanitized.reduce((acc, allocation) => acc + allocation.quantity, 0);
+
+  if (total > targetQuantity) {
+    let excess = total - targetQuantity;
+    const order = sanitized
+      .map((_, index) => index)
+      .filter((index) => index !== preferredIndex)
+      .concat(preferredIndex);
+
+    for (const index of order) {
+      if (excess <= 0) break;
+      const deduct = Math.min(excess, sanitized[index].quantity);
+      sanitized[index].quantity -= deduct;
+      excess -= deduct;
+    }
+  }
+
+  const filtered = sanitized.filter((allocation, index) => allocation.quantity > 0 || index === preferredIndex);
+  if (filtered.length === 0) {
+    return targetQuantity > 0 ? [{ size: '', quantity: targetQuantity }] : [];
+  }
+
+  total = filtered.reduce((acc, allocation) => acc + allocation.quantity, 0);
+  if (total < targetQuantity) {
+    const index = preferredIndex < filtered.length ? preferredIndex : 0;
+    filtered[index] = {
+      ...filtered[index],
+      quantity: filtered[index].quantity + (targetQuantity - total)
+    };
+  }
+
+  return filtered;
+};
+
+const normalizeAllocationsForQuantity = (
+  allocations: Record<FinishedComponentType, ComponentAllocation[]>,
+  quantity: number
+): Record<FinishedComponentType, ComponentAllocation[]> => {
+  const result: Record<FinishedComponentType, ComponentAllocation[]> = {
+    bra: [],
+    panties: [],
+    belt: [],
+    garter: []
+  };
+
+  for (const component of FINISHED_COMPONENTS) {
+    result[component] = rebalanceAllocations(allocations[component] ?? [], quantity);
+  }
+
+  return result;
+};
+
+type OrderItemForm = {
+  productId: number;
+  quantity: number;
+  price: number;
+  discount: number;
+  allocations: Record<FinishedComponentType, ComponentAllocation[]>;
+};
+
 type OrderFormState = {
   id?: number;
   orderNumber: string;
@@ -27,7 +123,7 @@ type OrderFormState = {
   clientId?: number | null;
   deliveryAddress: string;
   status: Order['status'];
-  items: Array<{ productId: number; quantity: number; price: number; discount: number }>;
+  items: OrderItemForm[];
 };
 
 const defaultForm: OrderFormState = {
@@ -47,6 +143,7 @@ const OrdersPage: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [finishedInventory, setFinishedInventory] = useState<FinishedInventoryEntry[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<(typeof statuses)[number]['value']>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -90,14 +187,37 @@ const OrdersPage: React.FC = () => {
   };
 
   const loadData = async () => {
-    const [ordersData, productsData, clientsData] = await Promise.all([
+    const [ordersData, productsData, clientsData, finishedData] = await Promise.all([
       fetchOrders(),
       fetchProducts(),
-      fetchClients()
+      fetchClients(),
+      fetchFinishedInventory()
     ]);
     setOrders(ordersData);
     setProducts(productsData);
     setClients(clientsData);
+    setFinishedInventory(finishedData);
+  };
+
+  const buildAllocationsFromOrderItem = (item: Order['items'][number]) => {
+    const base: Record<FinishedComponentType, ComponentAllocation[]> = {
+      bra: [],
+      panties: [],
+      belt: [],
+      garter: []
+    };
+
+    for (const allocation of item.allocations ?? []) {
+      base[allocation.component].push({ size: allocation.size, quantity: allocation.quantity });
+    }
+
+    for (const component of FINISHED_COMPONENTS) {
+      if (base[component].length === 0) {
+        base[component] = [{ size: '', quantity: item.quantity }];
+      }
+    }
+
+    return normalizeAllocationsForQuantity(base, item.quantity);
   };
 
   useEffect(() => {
@@ -122,6 +242,30 @@ const OrdersPage: React.FC = () => {
       return matchesSearch && matchesStatus;
     });
   }, [orders, search, statusFilter]);
+
+  const inventoryByProduct = useMemo(() => {
+    const map = new Map<number, Record<FinishedComponentType, Record<string, number>>>();
+
+    for (const entry of finishedInventory) {
+      if (!map.has(entry.productId)) {
+        map.set(entry.productId, {
+          bra: {},
+          panties: {},
+          belt: {},
+          garter: {}
+        });
+      }
+      const record = map.get(entry.productId)!;
+      for (const component of FINISHED_COMPONENTS) {
+        const value = entry.components[component];
+        if (value > 0) {
+          record[component][entry.size] = value;
+        }
+      }
+    }
+
+    return map;
+  }, [finishedInventory]);
 
   const matchedClient = useMemo(() => {
     const instagram = formState.customerInstagram.trim().toLowerCase();
@@ -208,7 +352,8 @@ const OrdersPage: React.FC = () => {
           productId: item.id,
           quantity: item.quantity,
           price: item.price,
-          discount: item.discount
+          discount: item.discount,
+          allocations: buildAllocationsFromOrderItem(item)
         }))
       });
     } else {
@@ -230,16 +375,31 @@ const OrdersPage: React.FC = () => {
   const handleItemChange = (index: number, field: 'productId' | 'quantity' | 'price' | 'discount', value: string) => {
     setFormState((prev) => {
       const updated = [...prev.items];
+      const current = updated[index];
+      if (!current) {
+        return prev;
+      }
+
       if (field === 'productId') {
-        const product = products.find((p) => p.id === Number(value));
+        const productId = Number(value);
+        const product = products.find((p) => p.id === productId);
         updated[index] = {
-          ...updated[index],
-          productId: Number(value),
-          price: product?.effectiveSalePrice ?? product?.salePrice ?? 0
+          ...current,
+          productId,
+          price: product?.effectiveSalePrice ?? product?.salePrice ?? current.price,
+          allocations: createAllocationTemplate(current.quantity)
+        };
+      } else if (field === 'quantity') {
+        const quantity = Math.max(1, Math.floor(Number(value)) || 1);
+        updated[index] = {
+          ...current,
+          quantity,
+          allocations: normalizeAllocationsForQuantity(current.allocations, quantity)
         };
       } else {
-        updated[index] = { ...updated[index], [field]: Number(value) };
+        updated[index] = { ...current, [field]: Number(value) };
       }
+
       return { ...prev, items: updated };
     });
   };
@@ -249,15 +409,17 @@ const OrdersPage: React.FC = () => {
       showToast({ title: 'Немає доступних товарів', description: 'Створіть товар перед додаванням до замовлення', type: 'info' });
       return;
     }
+    const defaultProduct = products[0];
     setFormState((prev) => ({
       ...prev,
       items: [
         ...prev.items,
         {
-          productId: products[0].id,
+          productId: defaultProduct.id,
           quantity: 1,
-          price: products[0].effectiveSalePrice ?? products[0].salePrice,
-          discount: 0
+          price: defaultProduct.effectiveSalePrice ?? defaultProduct.salePrice,
+          discount: 0,
+          allocations: createAllocationTemplate(1)
         }
       ]
     }));
@@ -267,14 +429,150 @@ const OrdersPage: React.FC = () => {
     setFormState((prev) => ({ ...prev, items: prev.items.filter((_, idx) => idx !== index) }));
   };
 
+  const addAllocationRow = (itemIndex: number, component: FinishedComponentType) => {
+    setFormState((prev) => {
+      const updated = [...prev.items];
+      const current = updated[itemIndex];
+      if (!current) return prev;
+      const allocations = [...current.allocations[component], { size: '', quantity: 0 }];
+      updated[itemIndex] = {
+        ...current,
+        allocations: {
+          ...current.allocations,
+          [component]: rebalanceAllocations(allocations, current.quantity, allocations.length - 1)
+        }
+      };
+      return { ...prev, items: updated };
+    });
+  };
+
+  const removeAllocationRow = (itemIndex: number, component: FinishedComponentType, allocationIndex: number) => {
+    setFormState((prev) => {
+      const updated = [...prev.items];
+      const current = updated[itemIndex];
+      if (!current) return prev;
+      const allocations = [...current.allocations[component]];
+      if (allocations.length <= 1) {
+        updated[itemIndex] = {
+          ...current,
+          allocations: {
+            ...current.allocations,
+            [component]: [{ size: '', quantity: current.quantity }]
+          }
+        };
+      } else {
+        allocations.splice(allocationIndex, 1);
+        updated[itemIndex] = {
+          ...current,
+          allocations: {
+            ...current.allocations,
+            [component]: rebalanceAllocations(allocations, current.quantity)
+          }
+        };
+      }
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handleAllocationSizeChange = (
+    itemIndex: number,
+    component: FinishedComponentType,
+    allocationIndex: number,
+    size: string
+  ) => {
+    setFormState((prev) => {
+      const updated = [...prev.items];
+      const current = updated[itemIndex];
+      if (!current) return prev;
+      const allocations = current.allocations[component].map((allocation, index) =>
+        index === allocationIndex ? { ...allocation, size } : allocation
+      );
+      updated[itemIndex] = {
+        ...current,
+        allocations: {
+          ...current.allocations,
+          [component]: allocations
+        }
+      };
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handleAllocationQuantityChange = (
+    itemIndex: number,
+    component: FinishedComponentType,
+    allocationIndex: number,
+    quantityValue: string
+  ) => {
+    setFormState((prev) => {
+      const updated = [...prev.items];
+      const current = updated[itemIndex];
+      if (!current) return prev;
+      const quantity = Math.max(0, Math.floor(Number(quantityValue)) || 0);
+      const allocations = current.allocations[component].map((allocation, index) =>
+        index === allocationIndex ? { ...allocation, quantity } : allocation
+      );
+      updated[itemIndex] = {
+        ...current,
+        allocations: {
+          ...current.allocations,
+          [component]: rebalanceAllocations(allocations, current.quantity, allocationIndex)
+        }
+      };
+      return { ...prev, items: updated };
+    });
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
+      const payloadItems = formState.items
+        .filter((item) => item.productId)
+        .map((item) => {
+          for (const component of FINISHED_COMPONENTS) {
+            const totalAllocated = item.allocations[component].reduce((acc, allocation) => acc + allocation.quantity, 0);
+            if (totalAllocated !== item.quantity) {
+              throw new Error(
+                `${COMPONENT_LABELS[component]}: розподіліть ${item.quantity} од. (зараз ${totalAllocated})`
+              );
+            }
+            if (item.allocations[component].some((allocation) => !allocation.size.trim())) {
+              throw new Error('Будь ласка, оберіть розмір для кожного елементу комплекту');
+            }
+          }
+
+          return {
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+            discount: item.discount,
+            allocations: FINISHED_COMPONENTS.flatMap((component) =>
+              item.allocations[component].map((allocation) => ({
+                component,
+                size: allocation.size,
+                quantity: allocation.quantity
+              }))
+            )
+          };
+        });
+
+      if (payloadItems.length === 0) {
+        throw new Error('Додайте хоча б один товар до замовлення');
+      }
+
       const payload = {
-        ...formState,
+        id: formState.id,
+        orderNumber: formState.orderNumber,
+        customerFirstName: formState.customerFirstName,
+        customerLastName: formState.customerLastName,
+        customerInstagram: formState.customerInstagram,
+        customerPhone: formState.customerPhone,
+        customerBirthDate: formState.customerBirthDate,
+        deliveryAddress: formState.deliveryAddress,
+        status: formState.status,
         clientId: formState.clientId ?? matchedClient?.id ?? null,
         totalAmount,
-        items: formState.items.filter((item) => item.productId)
+        items: payloadItems
       };
       await saveOrder(payload);
       showToast({ title: formState.id ? 'Замовлення оновлено' : 'Замовлення створено', type: 'success' });
@@ -561,53 +859,143 @@ const OrdersPage: React.FC = () => {
                   </button>
                 </div>
                 <div className="space-y-3">
-                  {formState.items.map((item, index) => (
-                    <div key={index} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm md:grid-cols-[1.5fr_repeat(3,1fr)_auto]">
-                      <select
-                        value={item.productId}
-                        onChange={(event) => handleItemChange(index, 'productId', event.target.value)}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                      >
-                        {products.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min={1}
-                        value={item.quantity}
-                        onChange={(event) => handleItemChange(index, 'quantity', event.target.value)}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                      />
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.price}
-                        onChange={(event) => handleItemChange(index, 'price', event.target.value)}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                      />
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.discount}
-                        onChange={(event) => handleItemChange(index, 'discount', event.target.value)}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeItemRow(index)}
-                        className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
-                      >
-                        Видалити
-                      </button>
-                      <div className="md:col-span-5 text-xs text-slate-500">
-                        Сума: {((item.price - item.discount) * item.quantity).toFixed(2)} ₴
+                  {formState.items.map((item, index) => {
+                    const productInventory = finishedInventory.filter((entry) => entry.productId === item.productId);
+                    const setsAvailable = productInventory.reduce((acc, entry) => acc + entry.totalSets, 0);
+                    return (
+                      <div key={index} className="space-y-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-sm">
+                        <div className="grid gap-3 md:grid-cols-[1.5fr_repeat(3,1fr)_auto]">
+                          <select
+                            value={item.productId}
+                            onChange={(event) => handleItemChange(index, 'productId', event.target.value)}
+                            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                          >
+                            {products.map((product) => (
+                              <option key={product.id} value={product.id}>
+                                {product.name}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            min={1}
+                            value={item.quantity}
+                            onChange={(event) => handleItemChange(index, 'quantity', event.target.value)}
+                            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            value={item.price}
+                            onChange={(event) => handleItemChange(index, 'price', event.target.value)}
+                            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            value={item.discount}
+                            onChange={(event) => handleItemChange(index, 'discount', event.target.value)}
+                            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeItemRow(index)}
+                            className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
+                          >
+                            Видалити
+                          </button>
+                        </div>
+                        <div className="flex flex-col gap-2 text-xs text-slate-500 md:flex-row md:items-center md:justify-between">
+                          <span>Сума: {((item.price - item.discount) * item.quantity).toFixed(2)} ₴</span>
+                          <span>Готових комплектів на складі: {setsAvailable}</span>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {FINISHED_COMPONENTS.map((component) => {
+                            const allocations = item.allocations[component];
+                            const allocatedTotal = allocations.reduce((acc, allocation) => acc + allocation.quantity, 0);
+                            const available = inventoryByProduct.get(item.productId)?.[component] ?? {};
+                            const sizeOptions = new Map<string, number>();
+                            Object.entries(available).forEach(([size, quantity]) => sizeOptions.set(size, quantity));
+                            allocations.forEach((allocation) => {
+                              if (allocation.size && !sizeOptions.has(allocation.size)) {
+                                sizeOptions.set(allocation.size, 0);
+                              }
+                            });
+                            const options = Array.from(sizeOptions.entries()).sort((a, b) => a[0].localeCompare(b[0], 'uk', { numeric: true }));
+                            const canRemove = allocations.length > 1;
+                            return (
+                              <div key={component} className="space-y-2 rounded-xl border border-slate-200 bg-white/60 p-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-sm font-semibold text-slate-700">{COMPONENT_LABELS[component]}</span>
+                                  <span className="text-xs text-slate-500">
+                                    Розподілено: {allocatedTotal} / {item.quantity}
+                                  </span>
+                                </div>
+                                {options.length === 0 ? (
+                                  <div className="rounded-xl border border-dashed border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-500">
+                                    Немає доступних виробів на складі
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {allocations.map((allocation, allocationIndex) => (
+                                      <div key={allocationIndex} className="grid grid-cols-[minmax(0,1fr)_100px_auto] items-center gap-2">
+                                        <select
+                                          value={allocation.size}
+                                          onChange={(event) =>
+                                            handleAllocationSizeChange(index, component, allocationIndex, event.target.value)
+                                          }
+                                          className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                                        >
+                                          <option value="">Оберіть розмір</option>
+                                          {options.map(([size, availableQty]) => (
+                                            <option key={size} value={size}>
+                                              {size} {availableQty > 0 ? `(${availableQty})` : '(0)'}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={allocation.quantity}
+                                          onChange={(event) =>
+                                            handleAllocationQuantityChange(index, component, allocationIndex, event.target.value)
+                                          }
+                                          className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => removeAllocationRow(index, component, allocationIndex)}
+                                          className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                          disabled={!canRemove}
+                                        >
+                                          Видалити
+                                        </button>
+                                      </div>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      onClick={() => addAllocationRow(index, component)}
+                                      className="text-xs font-semibold text-purple-600 transition hover:text-purple-700"
+                                    >
+                                      Додати розмір
+                                    </button>
+                                    <div className="text-xs text-slate-500">
+                                      Доступно:{' '}
+                                      {options.length > 0
+                                        ? options.map(([size, qty]) => `${size} (${qty})`).join(', ')
+                                        : '—'}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {formState.items.length === 0 && (
+
                     <div className="rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-6 text-center text-xs text-slate-500">
                       Додайте товари до замовлення
                     </div>
