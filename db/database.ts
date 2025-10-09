@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS materials (
   photo TEXT
 );
 
+CREATE TABLE IF NOT EXISTS material_receipts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  quantity REAL NOT NULL,
+  unit_price REAL NOT NULL,
+  comment TEXT,
+  received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -166,6 +175,7 @@ function ensureProductExpensesTable(db: Database.Database) {
     `);
   }
 }
+
 
 export type MaterialRecord = {
   id: number;

@@ -142,6 +142,68 @@ export function registerIpcHandlers() {
     };
   });
 
+  ipcMain.handle(
+    'materials:receipt',
+    (_event, materialId: number, payload: { quantity: number; unitPrice: number; comment?: string; date?: string }) => {
+      const quantity = Number(payload.quantity);
+      const unitPrice = Number(payload.unitPrice);
+
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error('Кількість повинна бути більшою за 0');
+      }
+
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new Error('Ціна за одиницю повинна бути невідʼємною');
+      }
+
+      const material = db
+        .prepare('SELECT * FROM materials WHERE id = ?')
+        .get(materialId) as MaterialRecord | undefined;
+
+      if (!material) {
+        throw new Error('Матеріал не знайдено');
+      }
+
+      const previousQuantity = Number(material.quantity) || 0;
+      const previousPrice = Number(material.price_per_unit) || 0;
+      const newQuantity = previousQuantity + quantity;
+      const totalValue = previousQuantity * previousPrice + quantity * unitPrice;
+      const newPricePerUnit = newQuantity > 0 ? totalValue / newQuantity : 0;
+
+      let receivedAt = new Date();
+      if (payload.date) {
+        const parsed = new Date(payload.date);
+        if (!Number.isNaN(parsed.getTime())) {
+          receivedAt = parsed;
+        }
+      }
+
+      db.prepare(
+        'INSERT INTO material_receipts (material_id, quantity, unit_price, comment, received_at) VALUES (?, ?, ?, ?, ?)' 
+      ).run(materialId, quantity, unitPrice, payload.comment?.trim() || null, receivedAt.toISOString());
+
+      db.prepare('UPDATE materials SET quantity = ?, price_per_unit = ? WHERE id = ?').run(
+        newQuantity,
+        newPricePerUnit,
+        materialId
+      );
+
+      const updated = db
+        .prepare('SELECT * FROM materials WHERE id = ?')
+        .get(materialId) as MaterialRecord;
+
+      return {
+        id: updated.id,
+        name: updated.name,
+        category: updated.category,
+        unit: updated.unit,
+        quantity: updated.quantity,
+        pricePerUnit: updated.price_per_unit,
+        photo: updated.photo ?? undefined
+      };
+    }
+  );
+
   ipcMain.handle('materials:delete', (_event, id: number) => {
     const del = db.prepare('DELETE FROM materials WHERE id = ?');
     del.run(id);

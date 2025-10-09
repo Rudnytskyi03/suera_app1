@@ -8,7 +8,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('materials:list'),
     create: (material: any) => ipcRenderer.invoke('materials:create', material),
     update: (id: number, material: any) => ipcRenderer.invoke('materials:update', id, material),
-    delete: (id: number) => ipcRenderer.invoke('materials:delete', id)
+    delete: (id: number) => ipcRenderer.invoke('materials:delete', id),
+    receive: (id: number, receipt: any) => ipcRenderer.invoke('materials:receipt', id, receipt)
   },
   products: {
     list: () => ipcRenderer.invoke('products:list'),

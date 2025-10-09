@@ -8,6 +8,13 @@ export type Material = {
   photo?: string;
 };
 
+export type MaterialReceiptInput = {
+  quantity: number;
+  unitPrice: number;
+  comment?: string;
+  date?: string;
+};
+
 export type ProductMaterial = {
   id: number;
   name: string;

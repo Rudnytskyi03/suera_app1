@@ -11,6 +11,10 @@ declare global {
         create: (material: any) => Promise<any>;
         update: (id: number, material: any) => Promise<any>;
         delete: (id: number) => Promise<{ success: boolean }>;
+        receive: (
+          id: number,
+          receipt: { quantity: number; unitPrice: number; comment?: string; date?: string }
+        ) => Promise<any>;
       };
       products: {
         list: () => Promise<any[]>;

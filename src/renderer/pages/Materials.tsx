@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Tag, UploadCloud, Edit, Trash2 } from 'lucide-react';
-import { createMaterial, deleteMaterial, fetchMaterials, updateMaterial } from '../services/materialsService';
+import { Plus, Search, Tag, UploadCloud, Edit, Trash2, ArrowDownToLine } from 'lucide-react';
+import {
+  createMaterial,
+  deleteMaterial,
+  fetchMaterials,
+  recordMaterialReceipt,
+  updateMaterial
+} from '../services/materialsService';
 import { Material } from '../types';
 import { useToast } from '../components/ToastProvider';
 import { PageHeader } from '../components/PageHeader';
@@ -21,6 +27,13 @@ const defaultForm = {
   photo: ''
 };
 
+const createDefaultReceiptForm = () => ({
+  quantity: '',
+  unitPrice: '',
+  comment: '',
+  date: new Date().toISOString().split('T')[0]
+});
+
 const MaterialsPage: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [search, setSearch] = useState('');
@@ -28,6 +41,9 @@ const MaterialsPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formState, setFormState] = useState(defaultForm);
   const [editingMaterial, setEditingMaterial] = useState<Material | null>(null);
+  const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [receiptMaterial, setReceiptMaterial] = useState<Material | null>(null);
+  const [receiptForm, setReceiptForm] = useState(createDefaultReceiptForm());
   const { showToast } = useToast();
 
   const loadMaterials = async () => {
@@ -65,6 +81,18 @@ const MaterialsPage: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const handleOpenReceiptModal = (material: Material) => {
+    setReceiptMaterial(material);
+    setReceiptForm(createDefaultReceiptForm());
+    setIsReceiptModalOpen(true);
+  };
+
+  const handleCloseReceiptModal = () => {
+    setIsReceiptModalOpen(false);
+    setReceiptMaterial(null);
+    setReceiptForm(createDefaultReceiptForm());
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
@@ -93,6 +121,40 @@ const MaterialsPage: React.FC = () => {
       await loadMaterials();
     } catch (error: any) {
       showToast({ title: 'Помилка видалення', description: error.message, type: 'error' });
+    }
+  };
+
+  const handleReceiptSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!receiptMaterial) {
+      return;
+    }
+
+    const quantity = Number(receiptForm.quantity);
+    const unitPrice = Number(receiptForm.unitPrice);
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      showToast({ title: 'Кількість повинна бути більшою за 0', type: 'error' });
+      return;
+    }
+
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      showToast({ title: 'Ціна за одиницю повинна бути невідʼємною', type: 'error' });
+      return;
+    }
+
+    try {
+      await recordMaterialReceipt(receiptMaterial.id, {
+        quantity,
+        unitPrice,
+        comment: receiptForm.comment?.trim() ? receiptForm.comment.trim() : undefined,
+        date: receiptForm.date
+      });
+      showToast({ title: 'Прихід додано', description: 'Середню ціну оновлено', type: 'success' });
+      handleCloseReceiptModal();
+      await loadMaterials();
+    } catch (error: any) {
+      showToast({ title: 'Не вдалося додати прихід', description: error.message, type: 'error' });
     }
   };
 
@@ -177,6 +239,12 @@ const MaterialsPage: React.FC = () => {
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-2">
                       <button
+                        onClick={() => handleOpenReceiptModal(material)}
+                        className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-600 shadow-sm transition hover:bg-emerald-100"
+                      >
+                        <ArrowDownToLine className="mr-1 inline h-4 w-4" /> Приход
+                      </button>
+                      <button
                         onClick={() => handleOpenModal(material)}
                         className="rounded-xl bg-purple-50 px-3 py-2 text-xs font-semibold text-purple-600 shadow-sm transition hover:bg-purple-100"
                       >
@@ -203,6 +271,79 @@ const MaterialsPage: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {isReceiptModalOpen && receiptMaterial && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-8 shadow-2xl">
+            <h2 className="text-xl font-semibold text-slate-900">
+              Новий прихід · {receiptMaterial.name}
+            </h2>
+            <form className="mt-6 space-y-4" onSubmit={handleReceiptSubmit}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Кількість</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    value={receiptForm.quantity}
+                    onChange={(event) => setReceiptForm({ ...receiptForm, quantity: event.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    required
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Ціна за одиницю</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={receiptForm.unitPrice}
+                    onChange={(event) => setReceiptForm({ ...receiptForm, unitPrice: event.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    required
+                  />
+                </label>
+              </div>
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-slate-600">Коментар</span>
+                <textarea
+                  value={receiptForm.comment}
+                  onChange={(event) => setReceiptForm({ ...receiptForm, comment: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                  rows={3}
+                  placeholder="Наприклад: нова партія від постачальника"
+                />
+              </label>
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-slate-600">Дата</span>
+                <input
+                  type="date"
+                  value={receiptForm.date}
+                  onChange={(event) => setReceiptForm({ ...receiptForm, date: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                  required
+                />
+              </label>
+              <div className="flex justify-end gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={handleCloseReceiptModal}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-gradient-to-r from-emerald-500 via-green-500 to-teal-600 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl"
+                >
+                  Зберегти
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

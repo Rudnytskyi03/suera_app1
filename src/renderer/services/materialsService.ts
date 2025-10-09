@@ -1,4 +1,4 @@
-import { Material } from '../types';
+import { Material, MaterialReceiptInput } from '../types';
 
 export async function fetchMaterials(): Promise<Material[]> {
   const rows = await window.api.materials.list();
@@ -15,4 +15,8 @@ export async function updateMaterial(id: number, input: Omit<Material, 'id'>) {
 
 export async function deleteMaterial(id: number) {
   return window.api.materials.delete(id);
+}
+
+export async function recordMaterialReceipt(id: number, receipt: MaterialReceiptInput) {
+  return window.api.materials.receive(id, receipt);
 }
