@@ -44,12 +44,16 @@ CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT,
+  materials_cost REAL NOT NULL DEFAULT 0,
+  additional_cost REAL NOT NULL DEFAULT 0,
   cost_price REAL NOT NULL DEFAULT 0,
   sewing_cost REAL NOT NULL DEFAULT 0,
   packaging_cost REAL NOT NULL DEFAULT 0,
   shipping_cost REAL NOT NULL DEFAULT 0,
   advertising_cost REAL NOT NULL DEFAULT 0,
   sale_price REAL NOT NULL DEFAULT 0,
+  discount_type TEXT NOT NULL DEFAULT 'none',
+  discount_value REAL NOT NULL DEFAULT 0,
   profit REAL NOT NULL DEFAULT 0
 );
 
@@ -63,7 +67,14 @@ CREATE TABLE IF NOT EXISTS product_materials (
 CREATE TABLE IF NOT EXISTS product_photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  url TEXT NOT NULL
+  file_path TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS product_expenses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  amount REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -87,6 +98,13 @@ CREATE TABLE IF NOT EXISTS order_items (
   discount REAL NOT NULL DEFAULT 0
 );
 `);
+
+  ensureColumn(db, 'products', 'materials_cost', 'materials_cost REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'products', 'additional_cost', 'additional_cost REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'products', 'discount_type', "discount_type TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn(db, 'products', 'discount_value', 'discount_value REAL NOT NULL DEFAULT 0');
+  ensureProductPhotosColumnRenamed(db);
+  ensureProductExpensesTable(db);
 
   const defaultUserStmt = db.prepare('SELECT * FROM users WHERE email = ?');
   const existingDefaultUser = defaultUserStmt.get('admin@lingeriedashboard.app') as
@@ -117,6 +135,38 @@ export function getDatabase() {
   return ensureDatabase();
 }
 
+function ensureColumn(db: Database.Database, table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((col) => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  }
+}
+
+function ensureProductPhotosColumnRenamed(db: Database.Database) {
+  const columns = db.prepare('PRAGMA table_info(product_photos)').all() as Array<{ name: string }>;
+  const hasUrl = columns.some((column) => column.name === 'url');
+  const hasFilePath = columns.some((column) => column.name === 'file_path');
+  if (hasUrl && !hasFilePath) {
+    db.exec('ALTER TABLE product_photos RENAME COLUMN url TO file_path');
+  }
+}
+
+function ensureProductExpensesTable(db: Database.Database) {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='product_expenses'")
+    .all() as Array<{ name: string }>;
+  if (tables.length === 0) {
+    db.exec(`
+      CREATE TABLE product_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        amount REAL NOT NULL DEFAULT 0
+      );
+    `);
+  }
+}
+
 export type MaterialRecord = {
   id: number;
   name: string;
@@ -131,12 +181,16 @@ export type ProductRecord = {
   id: number;
   name: string;
   description: string | null;
+  materials_cost: number;
+  additional_cost: number;
   cost_price: number;
   sewing_cost: number;
   packaging_cost: number;
   shipping_cost: number;
   advertising_cost: number;
   sale_price: number;
+  discount_type: 'none' | 'percent' | 'fixed';
+  discount_value: number;
   profit: number;
 };
 

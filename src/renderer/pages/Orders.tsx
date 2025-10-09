@@ -108,7 +108,7 @@ const OrdersPage: React.FC = () => {
         updated[index] = {
           ...updated[index],
           productId: Number(value),
-          price: product?.salePrice ?? 0
+          price: product?.effectiveSalePrice ?? product?.salePrice ?? 0
         };
       } else {
         updated[index] = { ...updated[index], [field]: Number(value) };
@@ -124,7 +124,15 @@ const OrdersPage: React.FC = () => {
     }
     setFormState((prev) => ({
       ...prev,
-      items: [...prev.items, { productId: products[0].id, quantity: 1, price: products[0].salePrice, discount: 0 }]
+      items: [
+        ...prev.items,
+        {
+          productId: products[0].id,
+          quantity: 1,
+          price: products[0].effectiveSalePrice ?? products[0].salePrice,
+          discount: 0
+        }
+      ]
     }));
   };
 

@@ -14,21 +14,40 @@ export type ProductMaterial = {
   unit: 'meters' | 'pieces';
   pricePerUnit: number;
   quantity: number;
+  availableQuantity: number;
 };
+
+export type ProductExpense = {
+  id?: number;
+  label: string;
+  amount: number;
+};
+
+export type ProductPhoto = {
+  id: number;
+  url: string;
+  path: string;
+};
+
+export type DiscountType = 'none' | 'percent' | 'fixed';
 
 export type Product = {
   id: number;
   name: string;
   description: string;
   materials: ProductMaterial[];
+  materialsCost: number;
+  additionalExpenses: ProductExpense[];
+  additionalCost: number;
   costPrice: number;
-  sewingCost: number;
-  packagingCost: number;
-  shippingCost: number;
-  advertisingCost: number;
   salePrice: number;
+  discountType: DiscountType;
+  discountValue: number;
+  discountAmount: number;
+  effectiveSalePrice: number;
   profit: number;
-  photos: string[];
+  photos: ProductPhoto[];
+  maxProductionQuantity: number;
 };
 
 export type OrderItem = {

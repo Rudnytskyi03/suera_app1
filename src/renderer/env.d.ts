@@ -1,3 +1,5 @@
+import type { SaveProductInput } from './services/productsService';
+
 declare global {
   interface Window {
     api: {
@@ -12,7 +14,7 @@ declare global {
       };
       products: {
         list: () => Promise<any[]>;
-        save: (product: any) => Promise<any>;
+        save: (product: SaveProductInput) => Promise<any>;
         delete: (id: number) => Promise<{ success: boolean }>;
       };
       orders: {

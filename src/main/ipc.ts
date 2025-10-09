@@ -1,6 +1,80 @@
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { getDatabase, MaterialRecord, OrderRecord, ProductRecord } from '../../db/database';
+
+const PHOTO_DIRECTORY = 'product-photos';
+
+function getPhotosDirectory() {
+  return path.join(app.getPath('userData'), PHOTO_DIRECTORY);
+}
+
+function ensurePhotosDirectory() {
+  const directory = getPhotosDirectory();
+  if (!fs.existsSync(directory)) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+}
+
+function resolvePhotoPath(storedPath: string | null | undefined) {
+  if (!storedPath) {
+    return null;
+  }
+  if (path.isAbsolute(storedPath)) {
+    return storedPath;
+  }
+  return path.join(app.getPath('userData'), storedPath);
+}
+
+function generatePhotoRelativePath(originalName: string) {
+  const timestamp = Date.now();
+  const ext = path.extname(originalName) || '.png';
+  const slug = originalName.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
+  const baseName = slug ? slug.replace(/^-+|-+$/g, '') : 'photo';
+  const random = Math.floor(Math.random() * 1_000_000);
+  return path.join(PHOTO_DIRECTORY, `${baseName || 'photo'}-${timestamp}-${random}${ext}`);
+}
+
+function calculateDiscount(type: 'none' | 'percent' | 'fixed', value: number, salePrice: number) {
+  if (type === 'percent') {
+    return Math.max(0, Math.min(100, value)) * salePrice * 0.01;
+  }
+  if (type === 'fixed') {
+    return Math.max(0, value);
+  }
+  return 0;
+}
+
+function mapExpensesForLegacyColumns(expenses: Array<{ label: string; amount: number }>) {
+  let sewing = 0;
+  let packaging = 0;
+  let shipping = 0;
+  let advertising = 0;
+
+  for (const expense of expenses) {
+    const normalized = expense.label.toLowerCase();
+    if (normalized.includes('пошив') || normalized.includes('шит')) {
+      sewing += expense.amount;
+      continue;
+    }
+    if (normalized.includes('упаков')) {
+      packaging += expense.amount;
+      continue;
+    }
+    if (normalized.includes('логист') || normalized.includes('достав') || normalized.includes('shipping')) {
+      shipping += expense.amount;
+      continue;
+    }
+    if (normalized.includes('реклам') || normalized.includes('marketing')) {
+      advertising += expense.amount;
+      continue;
+    }
+  }
+
+  return { sewing, packaging, shipping, advertising };
+}
 
 export function registerIpcHandlers() {
   const db = getDatabase();
@@ -75,11 +149,16 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('products:list', () => {
+    ensurePhotosDirectory();
     const products = db.prepare('SELECT * FROM products ORDER BY name').all() as ProductRecord[];
     const materialsStmt = db.prepare(
-      'SELECT pm.*, m.name as material_name, m.unit as material_unit, m.price_per_unit as material_price FROM product_materials pm JOIN materials m ON pm.material_id = m.id WHERE pm.product_id = ?'
+      `SELECT pm.*, m.name as material_name, m.unit as material_unit, m.price_per_unit as material_price, m.quantity as material_stock
+       FROM product_materials pm
+       JOIN materials m ON pm.material_id = m.id
+       WHERE pm.product_id = ?`
     );
-    const photosStmt = db.prepare('SELECT url FROM product_photos WHERE product_id = ?');
+    const photosStmt = db.prepare('SELECT id, file_path FROM product_photos WHERE product_id = ? ORDER BY id');
+    const expensesStmt = db.prepare('SELECT id, label, amount FROM product_expenses WHERE product_id = ? ORDER BY id');
 
     return products.map((product) => {
       const materials = materialsStmt.all(product.id).map((row: any) => ({
@@ -87,125 +166,289 @@ export function registerIpcHandlers() {
         name: row.material_name,
         unit: row.material_unit,
         pricePerUnit: row.material_price,
-        quantity: row.quantity
+        quantity: row.quantity,
+        availableQuantity: row.material_stock
       }));
-      const photos = photosStmt.all(product.id).map((row: any) => row.url);
+      const materialsCost = materials.reduce(
+        (total: number, material: any) => total + material.pricePerUnit * material.quantity,
+        0
+      );
+
+      let expenses = expensesStmt.all(product.id) as Array<{ id: number; label: string; amount: number }>;
+      let additionalCost = expenses.reduce((total, expense) => total + expense.amount, 0);
+
+      if (expenses.length === 0) {
+        const legacyExpenses = [
+          { label: 'Пошив', amount: product.sewing_cost },
+          { label: 'Упаковка', amount: product.packaging_cost },
+          { label: 'Логістика', amount: product.shipping_cost },
+          { label: 'Реклама', amount: product.advertising_cost }
+        ].filter((entry) => (entry.amount ?? 0) > 0);
+        if (legacyExpenses.length > 0) {
+          expenses = legacyExpenses.map((entry) => ({ ...entry }));
+          additionalCost = legacyExpenses.reduce((total, entry) => total + entry.amount, 0);
+        }
+      }
+
+      const discountAmount = calculateDiscount(product.discount_type, product.discount_value, product.sale_price);
+      const effectiveSalePrice = Math.max(0, product.sale_price - discountAmount);
+      const costPrice = materialsCost + additionalCost;
+      const profit = effectiveSalePrice - costPrice;
+
+      const capacity = materials.length
+        ? Math.min(
+            ...materials
+              .filter((material) => material.quantity > 0)
+              .map((material) => Math.floor(material.availableQuantity / material.quantity) || 0)
+          )
+        : 0;
+
+      const photos = photosStmt.all(product.id).flatMap((row: any) => {
+        const absolutePath = resolvePhotoPath(row.file_path);
+        if (!absolutePath || !fs.existsSync(absolutePath)) {
+          return [] as any[];
+        }
+        return [
+          {
+            id: row.id,
+            path: row.file_path,
+            url: pathToFileURL(absolutePath).toString()
+          }
+        ];
+      });
+
       return {
         id: product.id,
         name: product.name,
         description: product.description ?? '',
-        costPrice: product.cost_price,
-        sewingCost: product.sewing_cost,
-        packagingCost: product.packaging_cost,
-        shippingCost: product.shipping_cost,
-        advertisingCost: product.advertising_cost,
-        salePrice: product.sale_price,
-        profit: product.profit,
         materials,
-        photos
+        materialsCost,
+        additionalExpenses: expenses,
+        additionalCost,
+        costPrice,
+        salePrice: product.sale_price,
+        discountType: product.discount_type,
+        discountValue: product.discount_value,
+        discountAmount,
+        effectiveSalePrice,
+        profit,
+        photos,
+        maxProductionQuantity: Number.isFinite(capacity) ? capacity : 0
       };
     });
   });
 
-  ipcMain.handle('products:save', (_event, payload) => {
+  ipcMain.handle('products:save', async (_event, payload) => {
     const {
       id,
       name,
       description,
       materials,
-      sewingCost,
-      packagingCost,
-      shippingCost,
-      advertisingCost,
       salePrice,
-      photos
-    } = payload;
+      discount,
+      additionalExpenses,
+      photosToKeep = [],
+      newPhotos = []
+    } = payload as {
+      id?: number;
+      name: string;
+      description?: string;
+      materials: Array<{ id: number; quantity: number; pricePerUnit: number }>;
+      salePrice: number;
+      discount?: { type: 'none' | 'percent' | 'fixed'; value: number };
+      additionalExpenses: Array<{ label: string; amount: number }>;
+      photosToKeep?: number[];
+      newPhotos?: Array<{ originalName: string; filePath: string }>;
+    };
 
-    const costPrice = materials.reduce(
-      (acc: number, item: any) => acc + item.pricePerUnit * item.quantity,
+    ensurePhotosDirectory();
+
+    const normalizedMaterials = (materials ?? []).filter((item) => item.id && item.quantity > 0);
+    const normalizedExpenses = (additionalExpenses ?? []).filter((expense) => expense.label?.trim());
+    const materialsCost = normalizedMaterials.reduce(
+      (acc, item) => acc + (Number(item.pricePerUnit) || 0) * (Number(item.quantity) || 0),
       0
     );
-    const totalCost = costPrice + sewingCost + packagingCost + shippingCost + advertisingCost;
-    const profit = salePrice - totalCost;
+    const additionalCost = normalizedExpenses.reduce((acc, expense) => acc + (Number(expense.amount) || 0), 0);
+    const discountType = discount?.type ?? 'none';
+    const discountValue = Number(discount?.value ?? 0);
+    const costPrice = materialsCost + additionalCost;
+    const discountAmount = calculateDiscount(discountType, discountValue, salePrice);
+    const effectiveSalePrice = Math.max(0, salePrice - discountAmount);
+    const profit = effectiveSalePrice - costPrice;
 
-    if (id) {
+    const { sewing, packaging, shipping, advertising } = mapExpensesForLegacyColumns(normalizedExpenses);
+
+    let productId = id;
+
+    if (productId) {
       const update = db.prepare(
-        `UPDATE products SET name=@name, description=@description, cost_price=@costPrice, sewing_cost=@sewingCost,
-         packaging_cost=@packagingCost, shipping_cost=@shippingCost, advertising_cost=@advertisingCost,
-         sale_price=@salePrice, profit=@profit WHERE id=@id`
+        `UPDATE products SET
+           name=@name,
+           description=@description,
+           materials_cost=@materialsCost,
+           additional_cost=@additionalCost,
+           cost_price=@costPrice,
+           sewing_cost=@sewingCost,
+           packaging_cost=@packagingCost,
+           shipping_cost=@shippingCost,
+           advertising_cost=@advertisingCost,
+           sale_price=@salePrice,
+           discount_type=@discountType,
+           discount_value=@discountValue,
+           profit=@profit
+         WHERE id=@id`
       );
       update.run({
-        id,
+        id: productId,
         name,
         description,
+        materialsCost,
+        additionalCost,
         costPrice,
-        sewingCost,
-        packagingCost,
-        shippingCost,
-        advertisingCost,
+        sewingCost: sewing,
+        packagingCost: packaging,
+        shippingCost: shipping,
+        advertisingCost: advertising,
         salePrice,
+        discountType,
+        discountValue,
         profit
       });
-      db.prepare('DELETE FROM product_materials WHERE product_id = ?').run(id);
-      db.prepare('DELETE FROM product_photos WHERE product_id = ?').run(id);
-
-      const insertMaterial = db.prepare(
-        'INSERT INTO product_materials (product_id, material_id, quantity) VALUES (?, ?, ?)'
-      );
-      const insertPhoto = db.prepare('INSERT INTO product_photos (product_id, url) VALUES (?, ?)');
-      const insertMaterialTxn = db.transaction((items: any[]) => {
-        for (const item of items) {
-          insertMaterial.run(id, item.id, item.quantity);
-        }
-      });
-      insertMaterialTxn(materials);
-      const insertPhotoTxn = db.transaction((urls: string[]) => {
-        for (const url of urls) {
-          insertPhoto.run(id, url);
-        }
-      });
-      insertPhotoTxn(photos);
-
-      return { id, costPrice, profit };
+      db.prepare('DELETE FROM product_materials WHERE product_id = ?').run(productId);
+      db.prepare('DELETE FROM product_expenses WHERE product_id = ?').run(productId);
     } else {
       const insert = db.prepare(
-        `INSERT INTO products (name, description, cost_price, sewing_cost, packaging_cost, shipping_cost, advertising_cost, sale_price, profit)
-         VALUES (@name, @description, @costPrice, @sewingCost, @packagingCost, @shippingCost, @advertisingCost, @salePrice, @profit)`
+        `INSERT INTO products (
+           name,
+           description,
+           materials_cost,
+           additional_cost,
+           cost_price,
+           sewing_cost,
+           packaging_cost,
+           shipping_cost,
+           advertising_cost,
+           sale_price,
+           discount_type,
+           discount_value,
+           profit
+         ) VALUES (
+           @name,
+           @description,
+           @materialsCost,
+           @additionalCost,
+           @costPrice,
+           @sewingCost,
+           @packagingCost,
+           @shippingCost,
+           @advertisingCost,
+           @salePrice,
+           @discountType,
+           @discountValue,
+           @profit
+         )`
       );
       const result = insert.run({
         name,
         description,
+        materialsCost,
+        additionalCost,
         costPrice,
-        sewingCost,
-        packagingCost,
-        shippingCost,
-        advertisingCost,
+        sewingCost: sewing,
+        packagingCost: packaging,
+        shippingCost: shipping,
+        advertisingCost: advertising,
         salePrice,
+        discountType,
+        discountValue,
         profit
       });
-      const productId = Number(result.lastInsertRowid);
-      const insertMaterial = db.prepare(
-        'INSERT INTO product_materials (product_id, material_id, quantity) VALUES (?, ?, ?)'
-      );
-      const insertPhoto = db.prepare('INSERT INTO product_photos (product_id, url) VALUES (?, ?)');
-      const materialTxn = db.transaction((items: any[]) => {
-        for (const item of items) {
-          insertMaterial.run(productId, item.id, item.quantity);
-        }
-      });
-      materialTxn(materials);
-      const photoTxn = db.transaction((urls: string[]) => {
-        for (const url of urls) {
-          insertPhoto.run(productId, url);
-        }
-      });
-      photoTxn(photos);
-      return { id: productId, costPrice, profit };
+      productId = Number(result.lastInsertRowid);
     }
+
+    const insertMaterial = db.prepare(
+      'INSERT INTO product_materials (product_id, material_id, quantity) VALUES (?, ?, ?)'
+    );
+    const materialTxn = db.transaction((items: typeof normalizedMaterials) => {
+      for (const item of items) {
+        insertMaterial.run(productId, item.id, item.quantity);
+      }
+    });
+    materialTxn(normalizedMaterials);
+
+    const insertExpense = db.prepare(
+      'INSERT INTO product_expenses (product_id, label, amount) VALUES (?, ?, ?)'
+    );
+    const expenseTxn = db.transaction((expenses: typeof normalizedExpenses) => {
+      for (const expense of expenses) {
+        insertExpense.run(productId, expense.label.trim(), expense.amount);
+      }
+    });
+    expenseTxn(normalizedExpenses);
+
+    const existingPhotosStmt = db.prepare(
+      'SELECT id, file_path FROM product_photos WHERE product_id = ? ORDER BY id'
+    );
+    const existingPhotos = existingPhotosStmt.all(productId) as Array<{ id: number; file_path: string }>;
+    const photosToRemove = existingPhotos.filter((photo) => !photosToKeep.includes(photo.id));
+
+    const deletePhotoStmt = db.prepare('DELETE FROM product_photos WHERE id = ?');
+    for (const photo of photosToRemove) {
+      deletePhotoStmt.run(photo.id);
+      const absolute = resolvePhotoPath(photo.file_path);
+      if (absolute && fs.existsSync(absolute)) {
+        try {
+          fs.unlinkSync(absolute);
+        } catch (error) {
+          console.error('Failed to delete photo', error);
+        }
+      }
+    }
+
+    const insertPhoto = db.prepare('INSERT INTO product_photos (product_id, file_path) VALUES (?, ?)');
+    for (const photo of newPhotos) {
+      if (!photo.filePath) continue;
+      const relativePath = generatePhotoRelativePath(photo.originalName ?? 'photo');
+      const destination = path.join(app.getPath('userData'), relativePath);
+      const source = resolvePhotoPath(photo.filePath) ?? photo.filePath;
+      try {
+        fs.copyFileSync(source, destination);
+        insertPhoto.run(productId, relativePath);
+      } catch (error) {
+        console.error('Failed to store product photo', error);
+      }
+    }
+
+    return {
+      id: productId,
+      costPrice,
+      materialsCost,
+      additionalCost,
+      discountAmount,
+      effectiveSalePrice,
+      profit
+    };
   });
 
   ipcMain.handle('products:delete', (_event, id: number) => {
+    const photoRows = db
+      .prepare('SELECT file_path FROM product_photos WHERE product_id = ?')
+      .all(id) as Array<{ file_path: string }>;
+
     db.prepare('DELETE FROM products WHERE id = ?').run(id);
+
+    for (const row of photoRows) {
+      const absolute = resolvePhotoPath(row.file_path);
+      if (absolute && fs.existsSync(absolute)) {
+        try {
+          fs.unlinkSync(absolute);
+        } catch (error) {
+          console.error('Failed to delete photo', error);
+        }
+      }
+    }
+
     return { success: true };
   });
 
@@ -337,28 +580,40 @@ export function registerIpcHandlers() {
     const expenseTotals = db
       .prepare(
         `SELECT
-           SUM(cost_price) as materialsCost,
-           SUM(sewing_cost) as sewingCost,
-           SUM(packaging_cost) as packagingCost,
-           SUM(shipping_cost) as shippingCost,
-           SUM(advertising_cost) as advertisingCost
+           SUM(materials_cost) as materialsCost,
+           SUM(additional_cost) as additionalCost
          FROM products`
       )
       .get() as {
         materialsCost: number | null;
-        sewingCost: number | null;
-        packagingCost: number | null;
-        shippingCost: number | null;
-        advertisingCost: number | null;
+        additionalCost: number | null;
       };
+
+    const additionalBreakdown = db
+      .prepare(
+        `SELECT label, SUM(amount) as total
+         FROM product_expenses
+         GROUP BY label
+         ORDER BY total DESC`
+      )
+      .all() as Array<{ label: string; total: number }>;
 
     const expenseBreakdown = [
       { label: 'Матеріали', value: expenseTotals.materialsCost ?? 0 },
-      { label: 'Пошив', value: expenseTotals.sewingCost ?? 0 },
-      { label: 'Упаковка', value: expenseTotals.packagingCost ?? 0 },
-      { label: 'Доставка', value: expenseTotals.shippingCost ?? 0 },
-      { label: 'Реклама', value: expenseTotals.advertisingCost ?? 0 }
+      ...additionalBreakdown.map((row) => ({ label: row.label, value: row.total }))
     ];
+
+    const totalAdditionalFromBreakdown = additionalBreakdown.reduce(
+      (sum, row) => sum + row.total,
+      0
+    );
+
+    if ((expenseTotals.additionalCost ?? 0) > totalAdditionalFromBreakdown) {
+      expenseBreakdown.push({
+        label: 'Інші витрати',
+        value: (expenseTotals.additionalCost ?? 0) - totalAdditionalFromBreakdown
+      });
+    }
 
     return {
       revenue: totalRevenueRow.revenue ?? 0,
