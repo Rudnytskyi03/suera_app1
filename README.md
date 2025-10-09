@@ -21,10 +21,14 @@
 
 ```bash
 npm install
+npm run postinstall   # перевіряє та перебудовує native-модулі під Electron
 npm run dev
 ```
 
 Команда `npm run dev` запускає одночасно процеси Electron та Vite для рендерера.
+
+> Якщо після перевстановлення залежностей зʼявляється помилка `NODE_MODULE_VERSION` для `better-sqlite3`,
+> виконайте `npm run rebuild:native` — скрипт перебудує модуль під поточну версію Electron.
 
 ## Збірка
 
