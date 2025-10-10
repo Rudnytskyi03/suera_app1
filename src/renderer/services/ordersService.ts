@@ -26,6 +26,7 @@ export type SaveOrderInput = {
   totalAmount: number;
   orderDiscountPercent: number;
   clientId?: number | null;
+  expenses: Array<{ id?: number; label: string; amount: number }>;
 };
 
 export async function fetchOrders() {

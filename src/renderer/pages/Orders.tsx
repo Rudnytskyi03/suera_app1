@@ -1,5 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Calendar, FilePlus2, Filter, Gift, PackageSearch, Phone, Search, ShoppingCart, Trash2, UserRound } from 'lucide-react';
+import {
+  Calendar,
+  FilePlus2,
+  Filter,
+  Gift,
+  PackageSearch,
+  Phone,
+  PlusCircle,
+  Search,
+  ShoppingCart,
+  Trash2,
+  UserRound
+} from 'lucide-react';
 import { fetchOrders, saveOrder, deleteOrder, generateOrderNumber } from '../services/ordersService';
 import { fetchProducts } from '../services/productsService';
 import { fetchClients } from '../services/clientsService';
@@ -125,6 +137,7 @@ type OrderFormState = {
   status: Order['status'];
   items: OrderItemForm[];
   orderDiscountPercent: number;
+  expenses: Array<{ label: string; amount: number }>;
 };
 
 const defaultForm: OrderFormState = {
@@ -138,7 +151,8 @@ const defaultForm: OrderFormState = {
   deliveryAddress: '',
   status: 'new',
   items: [],
-  orderDiscountPercent: 0
+  orderDiscountPercent: 0,
+  expenses: []
 };
 
 const OrdersPage: React.FC = () => {
@@ -357,6 +371,10 @@ const OrdersPage: React.FC = () => {
           price: item.price,
           discount: item.discount,
           allocations: buildAllocationsFromOrderItem(item)
+        })),
+        expenses: (order.expenses ?? []).map((expense) => ({
+          label: expense.label,
+          amount: expense.amount
         }))
       });
     } else {
@@ -390,6 +408,22 @@ const OrdersPage: React.FC = () => {
   const totalAmount = useMemo(() => {
     return Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
   }, [subtotal, discountAmount]);
+
+  const orderExpensesTotal = useMemo(() => {
+    return formState.expenses.reduce((acc, expense) => acc + (Number(expense.amount) || 0), 0);
+  }, [formState.expenses]);
+
+  const productionCostTotal = useMemo(() => {
+    return formState.items.reduce((acc, item) => {
+      const product = products.find((product) => product.id === item.productId);
+      const unitCost = product?.costPrice ?? 0;
+      return acc + unitCost * item.quantity;
+    }, 0);
+  }, [formState.items, products]);
+
+  const estimatedProfit = useMemo(() => {
+    return Math.round((totalAmount - productionCostTotal - orderExpensesTotal) * 100) / 100;
+  }, [totalAmount, productionCostTotal, orderExpensesTotal]);
 
   const handleItemChange = (index: number, field: 'productId' | 'quantity' | 'price' | 'discount', value: string) => {
     setFormState((prev) => {
@@ -446,6 +480,35 @@ const OrdersPage: React.FC = () => {
 
   const removeItemRow = (index: number) => {
     setFormState((prev) => ({ ...prev, items: prev.items.filter((_, idx) => idx !== index) }));
+  };
+
+  const handleOrderExpenseChange = (index: number, field: 'label' | 'amount', value: string) => {
+    setFormState((prev) => {
+      const updated = [...prev.expenses];
+      if (!updated[index]) {
+        return prev;
+      }
+      if (field === 'label') {
+        updated[index] = { ...updated[index], label: value };
+      } else {
+        updated[index] = { ...updated[index], amount: Number(value) };
+      }
+      return { ...prev, expenses: updated };
+    });
+  };
+
+  const addOrderExpenseRow = () => {
+    setFormState((prev) => ({
+      ...prev,
+      expenses: [...prev.expenses, { label: '', amount: 0 }]
+    }));
+  };
+
+  const removeOrderExpenseRow = (index: number) => {
+    setFormState((prev) => ({
+      ...prev,
+      expenses: prev.expenses.filter((_, idx) => idx !== index)
+    }));
   };
 
   const addAllocationRow = (itemIndex: number, component: FinishedComponentType) => {
@@ -592,7 +655,13 @@ const OrdersPage: React.FC = () => {
         clientId: formState.clientId ?? matchedClient?.id ?? null,
         totalAmount: Math.round(totalAmount * 100) / 100,
         orderDiscountPercent: sanitizedOrderDiscount,
-        items: payloadItems
+        items: payloadItems,
+        expenses: formState.expenses
+          .filter((expense) => expense.label.trim())
+          .map((expense) => ({
+            label: expense.label.trim(),
+            amount: Math.max(0, Number(expense.amount) || 0)
+          }))
       };
       await saveOrder(payload);
       showToast({ title: formState.id ? 'Замовлення оновлено' : 'Замовлення створено', type: 'success' });
@@ -1056,6 +1125,58 @@ const OrdersPage: React.FC = () => {
                 </div>
               </div>
 
+              <div className="rounded-2xl bg-white/80 p-4 shadow-sm">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-700">Витрати замовлення</h3>
+                    <p className="text-xs text-slate-500">
+                      Зафіксуйте витрати, що стосуються продажу: логістика, упаковка, реклама, комісії тощо.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addOrderExpenseRow}
+                    className="inline-flex items-center gap-2 rounded-xl bg-purple-50 px-3 py-2 text-xs font-semibold text-purple-600 transition hover:bg-purple-100"
+                  >
+                    <PlusCircle className="h-4 w-4" /> Додати витрату
+                  </button>
+                </div>
+                <div className="mt-3 space-y-3">
+                  {formState.expenses.map((expense, index) => (
+                    <div
+                      key={index}
+                      className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm md:grid-cols-[1.5fr_1fr_auto]"
+                    >
+                      <input
+                        value={expense.label}
+                        onChange={(event) => handleOrderExpenseChange(index, 'label', event.target.value)}
+                        placeholder="Тип витрати"
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        value={expense.amount}
+                        onChange={(event) => handleOrderExpenseChange(index, 'amount', event.target.value)}
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeOrderExpenseRow(index)}
+                        className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
+                      >
+                        <Trash2 className="mr-1 inline h-4 w-4" /> Видалити
+                      </button>
+                    </div>
+                  ))}
+                  {formState.expenses.length === 0 && (
+                    <div className="rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-6 text-center text-xs text-slate-500">
+                      Додайте витрати, що виникли під час продажу, щоби бачити реальний прибуток замовлення
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="rounded-2xl bg-purple-50/40 p-4 text-sm text-slate-700">
                 <div className="flex items-center gap-3 text-slate-800">
                   <Calendar className="h-4 w-4 text-purple-500" />
@@ -1080,6 +1201,22 @@ const OrdersPage: React.FC = () => {
                   <div className="flex items-center justify-between text-base font-semibold text-slate-800">
                     <span>До оплати</span>
                     <span>{totalAmount.toFixed(2)} ₴</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span>Собівартість виробництва</span>
+                    <span>{productionCostTotal.toFixed(2)} ₴</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span>Витрати цього замовлення</span>
+                    <span>{orderExpensesTotal.toFixed(2)} ₴</span>
+                  </div>
+                  <div
+                    className={`flex items-center justify-between text-sm font-semibold ${
+                      estimatedProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                    }`}
+                  >
+                    <span>Очікуваний прибуток</span>
+                    <span>{estimatedProfit.toFixed(2)} ₴</span>
                   </div>
                 </div>
               </div>

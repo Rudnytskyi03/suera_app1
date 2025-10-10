@@ -7,7 +7,7 @@ export type SaveProductInput = {
   salePrice: number;
   discount: { type: DiscountType; value: number };
   materials: Array<{ id: number; quantity: number; pricePerUnit: number }>;
-  additionalExpenses: Array<{ label: string; amount: number }>;
+  productionExpenses: Array<{ label: string; amount: number }>;
   photosToKeep: number[];
   newPhotos: Array<{ originalName: string; filePath: string }>;
 };

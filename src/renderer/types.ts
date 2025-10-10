@@ -45,8 +45,8 @@ export type Product = {
   description: string;
   materials: ProductMaterial[];
   materialsCost: number;
-  additionalExpenses: ProductExpense[];
-  additionalCost: number;
+  productionExpenses: ProductExpense[];
+  productionCost: number;
   costPrice: number;
   salePrice: number;
   discountType: DiscountType;
@@ -56,6 +56,12 @@ export type Product = {
   profit: number;
   photos: ProductPhoto[];
   maxProductionQuantity: number;
+};
+
+export type OrderExpense = {
+  id?: number;
+  label: string;
+  amount: number;
 };
 
 export type FinishedComponentType = 'bra' | 'panties' | 'belt' | 'garter';
@@ -88,6 +94,7 @@ export type Order = {
   status: 'new' | 'shipped' | 'returned' | 'completed';
   total_amount: number;
   created_at: string;
+  expenses: OrderExpense[];
   items: Array<{
     id: number;
     name: string;

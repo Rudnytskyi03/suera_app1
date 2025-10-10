@@ -121,6 +121,13 @@ CREATE TABLE IF NOT EXISTS order_items (
   discount REAL NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS order_expenses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  amount REAL NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS finished_inventory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -162,6 +169,7 @@ CREATE TABLE IF NOT EXISTS order_finished_allocations (
   ensureColumn(db, 'orders', 'customer_birth_date', 'customer_birth_date TEXT');
   ensureColumn(db, 'orders', 'client_id', 'client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL');
   ensureColumn(db, 'orders', 'discount_percent', 'discount_percent REAL NOT NULL DEFAULT 0');
+  ensureOrderExpensesTable(db);
   ensureFinishedTables(db);
   backfillClientsFromOrders(db);
 
@@ -219,6 +227,23 @@ function ensureProductExpensesTable(db: Database.Database) {
       CREATE TABLE product_expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        amount REAL NOT NULL DEFAULT 0
+      );
+    `);
+  }
+}
+
+function ensureOrderExpensesTable(db: Database.Database) {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='order_expenses'")
+    .all() as Array<{ name: string }>;
+
+  if (tables.length === 0) {
+    db.exec(`
+      CREATE TABLE order_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         label TEXT NOT NULL,
         amount REAL NOT NULL DEFAULT 0
       );
@@ -470,4 +495,11 @@ export type OrderFinishedAllocationRecord = {
   component: string;
   size: string;
   quantity: number;
+};
+
+export type OrderExpenseRecord = {
+  id: number;
+  order_id: number;
+  label: string;
+  amount: number;
 };

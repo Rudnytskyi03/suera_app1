@@ -6,7 +6,7 @@ import { DiscountType, Material, Product, ProductExpense, ProductPhoto } from '.
 import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/ToastProvider';
 
-const DEFAULT_EXPENSE_LABELS = ['Пошив', 'Упаковка', 'Логістика', 'Реклама'];
+const PRODUCTION_EXPENSE_LABELS = ['Пошив'];
 const UNIT_LABELS: Record<Material['unit'], string> = {
   meters: 'м',
   pieces: 'шт'
@@ -18,11 +18,11 @@ type PendingPhoto = {
 };
 
 const createDefaultExpenses = (): ProductExpense[] =>
-  DEFAULT_EXPENSE_LABELS.map((label) => ({ label, amount: 0 }));
+  PRODUCTION_EXPENSE_LABELS.map((label) => ({ label, amount: 0 }));
 
 const withDefaultExpenses = (expenses: ProductExpense[]): ProductExpense[] => {
   const normalized = [...expenses];
-  for (const label of DEFAULT_EXPENSE_LABELS) {
+  for (const label of PRODUCTION_EXPENSE_LABELS) {
     if (!normalized.some((expense) => expense.label.toLowerCase() === label.toLowerCase())) {
       normalized.push({ label, amount: 0 });
     }
@@ -38,7 +38,7 @@ type ProductFormState = {
   discountType: DiscountType;
   discountValue: number;
   materials: Array<{ materialId: number; quantity: number }>;
-  additionalExpenses: ProductExpense[];
+  productionExpenses: ProductExpense[];
   existingPhotos: ProductPhoto[];
   newPhotos: PendingPhoto[];
 };
@@ -50,7 +50,7 @@ const createEmptyFormState = (): ProductFormState => ({
   discountType: 'none',
   discountValue: 0,
   materials: [],
-  additionalExpenses: createDefaultExpenses(),
+  productionExpenses: createDefaultExpenses(),
   existingPhotos: [],
   newPhotos: []
 });
@@ -101,8 +101,8 @@ const ProductsPage: React.FC = () => {
         discountType: product.discountType ?? 'none',
         discountValue: product.discountValue ?? 0,
         materials: mapMaterials(product.materials),
-        additionalExpenses: withDefaultExpenses(
-          product.additionalExpenses.map((expense) => ({ ...expense }))
+        productionExpenses: withDefaultExpenses(
+          product.productionExpenses.map((expense) => ({ ...expense }))
         ),
         existingPhotos: product.photos.map((photo) => ({ ...photo })),
         newPhotos: []
@@ -149,11 +149,11 @@ const ProductsPage: React.FC = () => {
   }, [formState.materials, materials]);
 
   const materialsCost = selectedMaterialDetails.reduce((acc, item) => acc + item.cost, 0);
-  const additionalExpensesTotal = formState.additionalExpenses.reduce(
+  const productionExpensesTotal = formState.productionExpenses.reduce(
     (acc, expense) => acc + (Number(expense.amount) || 0),
     0
   );
-  const costPrice = materialsCost + additionalExpensesTotal;
+  const costPrice = materialsCost + productionExpensesTotal;
   const discountAmount =
     formState.discountType === 'percent'
       ? Math.max(0, Math.min(100, formState.discountValue)) * formState.salePrice * 0.01
@@ -193,27 +193,27 @@ const ProductsPage: React.FC = () => {
 
   const handleExpenseChange = (index: number, field: 'label' | 'amount', value: string) => {
     setFormState((prev) => {
-      const updated = [...prev.additionalExpenses];
+      const updated = [...prev.productionExpenses];
       if (field === 'label') {
         updated[index] = { ...updated[index], label: value };
       } else {
         updated[index] = { ...updated[index], amount: Number(value) };
       }
-      return { ...prev, additionalExpenses: updated };
+      return { ...prev, productionExpenses: updated };
     });
   };
 
   const addExpenseRow = () => {
     setFormState((prev) => ({
       ...prev,
-      additionalExpenses: [...prev.additionalExpenses, { label: '', amount: 0 }]
+      productionExpenses: [...prev.productionExpenses, { label: '', amount: 0 }]
     }));
   };
 
   const removeExpenseRow = (index: number) => {
     setFormState((prev) => ({
       ...prev,
-      additionalExpenses: prev.additionalExpenses.filter((_, idx) => idx !== index)
+      productionExpenses: prev.productionExpenses.filter((_, idx) => idx !== index)
     }));
   };
 
@@ -283,7 +283,7 @@ const ProductsPage: React.FC = () => {
         salePrice: formState.salePrice,
         discount: { type: formState.discountType, value: formState.discountValue },
         materials: materialPayload,
-        additionalExpenses: formState.additionalExpenses
+        productionExpenses: formState.productionExpenses
           .filter((expense) => expense.label.trim())
           .map((expense) => ({
             label: expense.label.trim(),
@@ -409,7 +409,7 @@ const ProductsPage: React.FC = () => {
                     <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-700">
                       <span className="font-semibold text-slate-800">Матеріали: {product.materials.length}</span>
                       <span className="text-xs text-slate-500">
-                        Додаткові витрати: {product.additionalCost.toLocaleString()} ₴
+                        Виробничі витрати: {product.productionCost.toLocaleString()} ₴
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
@@ -446,10 +446,10 @@ const ProductsPage: React.FC = () => {
                           )}
                         </div>
                         <div>
-                          <span className="text-xs uppercase text-purple-500">Додаткові витрати</span>
-                          {product.additionalExpenses.length > 0 ? (
+                          <span className="text-xs uppercase text-purple-500">Виробничі витрати</span>
+                          {product.productionExpenses.length > 0 ? (
                             <ul className="mt-2 space-y-1 text-xs text-slate-600">
-                              {product.additionalExpenses.map((expense, index) => (
+                              {product.productionExpenses.map((expense, index) => (
                                 <li
                                   key={`${expense.label}-${index}`}
                                   className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2"
@@ -460,7 +460,7 @@ const ProductsPage: React.FC = () => {
                               ))}
                             </ul>
                           ) : (
-                            <p className="mt-2 text-xs text-slate-400">Додаткові витрати відсутні</p>
+                            <p className="mt-2 text-xs text-slate-400">Виробничі витрати відсутні</p>
                           )}
                         </div>
                       </div>
@@ -633,7 +633,7 @@ const ProductsPage: React.FC = () => {
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-slate-700">Додаткові витрати</h3>
+                  <h3 className="text-sm font-semibold text-slate-700">Виробничі витрати</h3>
                   <button
                     type="button"
                     onClick={addExpenseRow}
@@ -643,7 +643,7 @@ const ProductsPage: React.FC = () => {
                   </button>
                 </div>
                 <div className="space-y-3">
-                  {formState.additionalExpenses.map((expense, index) => (
+                  {formState.productionExpenses.map((expense, index) => (
                     <div
                       key={index}
                       className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm md:grid-cols-[1.5fr_1fr_auto]"
@@ -670,9 +670,9 @@ const ProductsPage: React.FC = () => {
                       </button>
                     </div>
                   ))}
-                  {formState.additionalExpenses.length === 0 && (
+                  {formState.productionExpenses.length === 0 && (
                     <div className="rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-6 text-center text-xs text-slate-500">
-                      Додайте витрати, щоб врахувати логістику, упаковку та інші роботи
+                      Додайте постійні витрати виробництва (наприклад, пошив)
                     </div>
                   )}
                 </div>
@@ -731,7 +731,7 @@ const ProductsPage: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-xs uppercase text-purple-500">Додаткові витрати</span>
-                  <p className="text-lg font-semibold text-slate-900">{additionalExpensesTotal.toFixed(2)} ₴</p>
+                  <p className="text-lg font-semibold text-slate-900">{productionExpensesTotal.toFixed(2)} ₴</p>
                 </div>
                 <div>
                   <span className="text-xs uppercase text-purple-500">Собівартість</span>

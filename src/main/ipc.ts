@@ -235,31 +235,15 @@ function sanitizeInstagram(handle?: string | null) {
 
 function mapExpensesForLegacyColumns(expenses: Array<{ label: string; amount: number }>) {
   let sewing = 0;
-  let packaging = 0;
-  let shipping = 0;
-  let advertising = 0;
 
   for (const expense of expenses) {
     const normalized = expense.label.toLowerCase();
     if (normalized.includes('пошив') || normalized.includes('шит')) {
       sewing += expense.amount;
-      continue;
-    }
-    if (normalized.includes('упаков')) {
-      packaging += expense.amount;
-      continue;
-    }
-    if (normalized.includes('логист') || normalized.includes('достав') || normalized.includes('shipping')) {
-      shipping += expense.amount;
-      continue;
-    }
-    if (normalized.includes('реклам') || normalized.includes('marketing')) {
-      advertising += expense.amount;
-      continue;
     }
   }
 
-  return { sewing, packaging, shipping, advertising };
+  return { sewing, packaging: 0, shipping: 0, advertising: 0 };
 }
 
 export function registerIpcHandlers() {
@@ -670,24 +654,21 @@ export function registerIpcHandlers() {
       );
 
       let expenses = expensesStmt.all(product.id) as Array<{ id: number; label: string; amount: number }>;
-      let additionalCost = expenses.reduce((total, expense) => total + expense.amount, 0);
+      let productionCost = expenses.reduce((total, expense) => total + expense.amount, 0);
 
       if (expenses.length === 0) {
-        const legacyExpenses = [
-          { label: 'Пошив', amount: product.sewing_cost },
-          { label: 'Упаковка', amount: product.packaging_cost },
-          { label: 'Логістика', amount: product.shipping_cost },
-          { label: 'Реклама', amount: product.advertising_cost }
-        ].filter((entry) => (entry.amount ?? 0) > 0);
+        const legacyExpenses = [{ label: 'Пошив', amount: product.sewing_cost }].filter(
+          (entry) => (entry.amount ?? 0) > 0
+        );
         if (legacyExpenses.length > 0) {
           expenses = legacyExpenses.map((entry) => ({ ...entry }));
-          additionalCost = legacyExpenses.reduce((total, entry) => total + entry.amount, 0);
+          productionCost = legacyExpenses.reduce((total, entry) => total + entry.amount, 0);
         }
       }
 
       const discountAmount = calculateDiscount(product.discount_type, product.discount_value, product.sale_price);
       const effectiveSalePrice = Math.max(0, product.sale_price - discountAmount);
-      const costPrice = materialsCost + additionalCost;
+      const costPrice = materialsCost + productionCost;
       const profit = effectiveSalePrice - costPrice;
 
       const capacity = materials.length
@@ -718,8 +699,8 @@ export function registerIpcHandlers() {
         description: product.description ?? '',
         materials,
         materialsCost,
-        additionalExpenses: expenses,
-        additionalCost,
+        productionExpenses: expenses,
+        productionCost,
         costPrice,
         salePrice: product.sale_price,
         discountType: product.discount_type,
@@ -741,7 +722,7 @@ export function registerIpcHandlers() {
       materials,
       salePrice,
       discount,
-      additionalExpenses,
+      productionExpenses,
       photosToKeep = [],
       newPhotos = []
     } = payload as {
@@ -751,7 +732,7 @@ export function registerIpcHandlers() {
       materials: Array<{ id: number; quantity: number; pricePerUnit: number }>;
       salePrice: number;
       discount?: { type: 'none' | 'percent' | 'fixed'; value: number };
-      additionalExpenses: Array<{ label: string; amount: number }>;
+      productionExpenses: Array<{ label: string; amount: number }>;
       photosToKeep?: number[];
       newPhotos?: Array<{ originalName: string; filePath: string }>;
     };
@@ -759,15 +740,15 @@ export function registerIpcHandlers() {
     ensurePhotosDirectory();
 
     const normalizedMaterials = (materials ?? []).filter((item) => item.id && item.quantity > 0);
-    const normalizedExpenses = (additionalExpenses ?? []).filter((expense) => expense.label?.trim());
+    const normalizedExpenses = (productionExpenses ?? []).filter((expense) => expense.label?.trim());
     const materialsCost = normalizedMaterials.reduce(
       (acc, item) => acc + (Number(item.pricePerUnit) || 0) * (Number(item.quantity) || 0),
       0
     );
-    const additionalCost = normalizedExpenses.reduce((acc, expense) => acc + (Number(expense.amount) || 0), 0);
+    const productionCost = normalizedExpenses.reduce((acc, expense) => acc + (Number(expense.amount) || 0), 0);
     const discountType = discount?.type ?? 'none';
     const discountValue = Number(discount?.value ?? 0);
-    const costPrice = materialsCost + additionalCost;
+    const costPrice = materialsCost + productionCost;
     const discountAmount = calculateDiscount(discountType, discountValue, salePrice);
     const effectiveSalePrice = Math.max(0, salePrice - discountAmount);
     const profit = effectiveSalePrice - costPrice;
@@ -782,7 +763,7 @@ export function registerIpcHandlers() {
            name=@name,
            description=@description,
            materials_cost=@materialsCost,
-           additional_cost=@additionalCost,
+           additional_cost=@productionCost,
            cost_price=@costPrice,
            sewing_cost=@sewingCost,
            packaging_cost=@packagingCost,
@@ -799,7 +780,7 @@ export function registerIpcHandlers() {
         name,
         description,
         materialsCost,
-        additionalCost,
+        productionCost,
         costPrice,
         sewingCost: sewing,
         packagingCost: packaging,
@@ -828,12 +809,12 @@ export function registerIpcHandlers() {
            discount_type,
            discount_value,
            profit
-         ) VALUES (
-           @name,
-           @description,
-           @materialsCost,
-           @additionalCost,
-           @costPrice,
+        ) VALUES (
+          @name,
+          @description,
+          @materialsCost,
+          @productionCost,
+          @costPrice,
            @sewingCost,
            @packagingCost,
            @shippingCost,
@@ -848,7 +829,7 @@ export function registerIpcHandlers() {
         name,
         description,
         materialsCost,
-        additionalCost,
+        productionCost,
         costPrice,
         sewingCost: sewing,
         packagingCost: packaging,
@@ -919,7 +900,7 @@ export function registerIpcHandlers() {
       id: productId,
       costPrice,
       materialsCost,
-      additionalCost,
+      productionCost,
       discountAmount,
       effectiveSalePrice,
       profit
@@ -955,6 +936,7 @@ export function registerIpcHandlers() {
     const allocationsStmt = db.prepare(
       'SELECT component, size, quantity FROM order_finished_allocations WHERE order_item_id = ?'
     );
+    const expensesStmt = db.prepare('SELECT id, label, amount FROM order_expenses WHERE order_id = ? ORDER BY id');
 
     return orders.map((order) => ({
       ...order,
@@ -971,7 +953,8 @@ export function registerIpcHandlers() {
             size: normalizeFinishedSize(allocation.size),
             quantity: allocation.quantity
           }))
-      }))
+      })),
+      expenses: expensesStmt.all(order.id) as Array<{ id: number; label: string; amount: number }>
     }));
   });
 
@@ -988,7 +971,8 @@ export function registerIpcHandlers() {
       items,
       status,
       clientId: payloadClientId,
-      orderDiscountPercent
+      orderDiscountPercent,
+      expenses
     } = payload;
 
     const trimmedFirstName = (customerFirstName ?? '').trim();
@@ -1065,6 +1049,20 @@ export function registerIpcHandlers() {
       0
     );
 
+    const normalizedExpenses = (Array.isArray(expenses) ? expenses : [])
+      .map((expense: any, index: number) => {
+        const label = typeof expense?.label === 'string' ? expense.label.trim() : '';
+        const amount = Number(expense?.amount ?? 0);
+        if (!label) {
+          return null;
+        }
+        if (!Number.isFinite(amount) || amount < 0) {
+          throw new Error(`Сума витрати №${index + 1} повинна бути невід'ємною`);
+        }
+        return { label, amount: Math.round(amount * 100) / 100 };
+      })
+      .filter((expense): expense is { label: string; amount: number } => expense !== null);
+
     const rawDiscountPercent = Number(orderDiscountPercent);
     const discountPercent = Number.isFinite(rawDiscountPercent)
       ? Math.min(100, Math.max(0, rawDiscountPercent))
@@ -1072,6 +1070,7 @@ export function registerIpcHandlers() {
     const rawDiscountAmount = Math.min(subtotal, (subtotal * discountPercent) / 100);
     const discountAmount = Math.round(rawDiscountAmount * 100) / 100;
     const totalAmount = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+    const expensesTotal = normalizedExpenses.reduce((sum, expense) => sum + expense.amount, 0);
 
     const execute = db.transaction(() => {
       let clientId: number | null = payloadClientId ?? null;
@@ -1174,7 +1173,7 @@ export function registerIpcHandlers() {
           totalAmount,
           status
         });
-
+        db.prepare('DELETE FROM order_expenses WHERE order_id = ?').run(orderId);
         db.prepare('DELETE FROM order_items WHERE order_id = ?').run(orderId);
       } else {
         ensureInventoryAvailability();
@@ -1215,7 +1214,12 @@ export function registerIpcHandlers() {
         }
       }
 
-      return { id: orderId, totalAmount, discountPercent, discountAmount };
+      const insertExpenseStmt = db.prepare('INSERT INTO order_expenses (order_id, label, amount) VALUES (?, ?, ?)');
+      for (const expense of normalizedExpenses) {
+        insertExpenseStmt.run(orderId, expense.label, expense.amount);
+      }
+
+      return { id: orderId, totalAmount, discountPercent, discountAmount, expensesTotal };
     });
 
     return execute();
@@ -1344,15 +1348,15 @@ export function registerIpcHandlers() {
       .prepare(
         `SELECT
            SUM(materials_cost) as materialsCost,
-           SUM(additional_cost) as additionalCost
+           SUM(additional_cost) as productionCost
          FROM products`
       )
       .get() as {
         materialsCost: number | null;
-        additionalCost: number | null;
+        productionCost: number | null;
       };
 
-    const additionalBreakdown = db
+    const productionBreakdownRows = db
       .prepare(
         `SELECT label, SUM(amount) as total
          FROM product_expenses
@@ -1361,20 +1365,36 @@ export function registerIpcHandlers() {
       )
       .all() as Array<{ label: string; total: number }>;
 
+    const orderExpenseRows = db
+      .prepare(
+        `SELECT label, SUM(amount) as total
+         FROM order_expenses
+         GROUP BY label
+         ORDER BY total DESC`
+      )
+      .all() as Array<{ label: string; total: number }>;
+
+    const productionBreakdown = productionBreakdownRows.map((row) => ({
+      label: `Виробництво · ${row.label}`,
+      value: row.total
+    }));
+
+    const orderExpenseBreakdown = orderExpenseRows.map((row) => ({
+      label: `Продажі · ${row.label}`,
+      value: row.total
+    }));
+
+    const productionSubtotal = productionBreakdownRows.reduce((sum, row) => sum + row.total, 0);
     const expenseBreakdown = [
       { label: 'Матеріали', value: expenseTotals.materialsCost ?? 0 },
-      ...additionalBreakdown.map((row) => ({ label: row.label, value: row.total }))
+      ...productionBreakdown,
+      ...orderExpenseBreakdown
     ];
 
-    const totalAdditionalFromBreakdown = additionalBreakdown.reduce(
-      (sum, row) => sum + row.total,
-      0
-    );
-
-    if ((expenseTotals.additionalCost ?? 0) > totalAdditionalFromBreakdown) {
+    if ((expenseTotals.productionCost ?? 0) > productionSubtotal) {
       expenseBreakdown.push({
-        label: 'Інші витрати',
-        value: (expenseTotals.additionalCost ?? 0) - totalAdditionalFromBreakdown
+        label: 'Виробництво · Інше',
+        value: (expenseTotals.productionCost ?? 0) - productionSubtotal
       });
     }
 
