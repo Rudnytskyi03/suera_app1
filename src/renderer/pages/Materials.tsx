@@ -364,11 +364,12 @@ const MaterialsPage: React.FC = () => {
 
       {isReceiptModalOpen && receiptMaterial && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-8 shadow-2xl">
-            <h2 className="text-xl font-semibold text-slate-900">
-              Новий прихід · {receiptMaterial.name}
-            </h2>
-            <form className="mt-6 space-y-4" onSubmit={handleReceiptSubmit}>
+          <div className="w-full max-w-lg">
+            <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white p-8 shadow-2xl">
+              <h2 className="text-xl font-semibold text-slate-900">
+                Новий прихід · {receiptMaterial.name}
+              </h2>
+              <form className="mt-6 space-y-4" onSubmit={handleReceiptSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Кількість</span>
@@ -430,18 +431,20 @@ const MaterialsPage: React.FC = () => {
                   Зберегти
                 </button>
               </div>
-            </form>
+              </form>
+            </div>
           </div>
         </div>
       )}
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-xl rounded-3xl bg-white p-8 shadow-2xl">
-            <h2 className="text-xl font-semibold text-slate-900">
-              {editingMaterial ? 'Редагувати матеріал' : 'Новий матеріал'}
-            </h2>
-            <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+          <div className="w-full max-w-xl">
+            <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white p-8 shadow-2xl">
+              <h2 className="text-xl font-semibold text-slate-900">
+                {editingMaterial ? 'Редагувати матеріал' : 'Новий матеріал'}
+              </h2>
+              <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Назва</span>
@@ -556,7 +559,8 @@ const MaterialsPage: React.FC = () => {
                   Зберегти
                 </button>
               </div>
-            </form>
+              </form>
+            </div>
           </div>
         </div>
       )}

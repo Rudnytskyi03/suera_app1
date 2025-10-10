@@ -84,6 +84,7 @@ export type Order = {
   customer_birth_date?: string;
   client_id?: number | null;
   delivery_address?: string;
+  discount_percent: number;
   status: 'new' | 'shipped' | 'returned' | 'completed';
   total_amount: number;
   created_at: string;

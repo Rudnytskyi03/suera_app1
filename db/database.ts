@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS orders (
   customer_birth_date TEXT,
   client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
   delivery_address TEXT,
+  discount_percent REAL NOT NULL DEFAULT 0,
   total_amount REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'new',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS order_finished_allocations (
   ensureColumn(db, 'orders', 'customer_phone', 'customer_phone TEXT');
   ensureColumn(db, 'orders', 'customer_birth_date', 'customer_birth_date TEXT');
   ensureColumn(db, 'orders', 'client_id', 'client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL');
+  ensureColumn(db, 'orders', 'discount_percent', 'discount_percent REAL NOT NULL DEFAULT 0');
   ensureFinishedTables(db);
   backfillClientsFromOrders(db);
 
@@ -425,6 +427,7 @@ export type OrderRecord = {
   customer_birth_date: string | null;
   client_id: number | null;
   delivery_address: string | null;
+  discount_percent: number;
   total_amount: number;
   status: 'new' | 'shipped' | 'returned' | 'completed';
   created_at: string;

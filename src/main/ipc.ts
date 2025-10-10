@@ -987,7 +987,8 @@ export function registerIpcHandlers() {
       deliveryAddress,
       items,
       status,
-      clientId: payloadClientId
+      clientId: payloadClientId,
+      orderDiscountPercent
     } = payload;
 
     const trimmedFirstName = (customerFirstName ?? '').trim();
@@ -1059,10 +1060,18 @@ export function registerIpcHandlers() {
       };
     });
 
-    const totalAmount = normalizedItems.reduce(
+    const subtotal = normalizedItems.reduce(
       (acc: number, item) => acc + (item.price - item.discount) * item.quantity,
       0
     );
+
+    const rawDiscountPercent = Number(orderDiscountPercent);
+    const discountPercent = Number.isFinite(rawDiscountPercent)
+      ? Math.min(100, Math.max(0, rawDiscountPercent))
+      : 0;
+    const rawDiscountAmount = Math.min(subtotal, (subtotal * discountPercent) / 100);
+    const discountAmount = Math.round(rawDiscountAmount * 100) / 100;
+    const totalAmount = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
 
     const execute = db.transaction(() => {
       let clientId: number | null = payloadClientId ?? null;
@@ -1149,7 +1158,8 @@ export function registerIpcHandlers() {
         db.prepare(
           `UPDATE orders SET order_number=@orderNumber, customer_first_name=@customerFirstName, customer_last_name=@customerLastName,
              customer_instagram=@customerInstagram, customer_phone=@customerPhone, customer_birth_date=@customerBirthDate,
-             client_id=@clientId, delivery_address=@deliveryAddress, total_amount=@totalAmount, status=@status WHERE id=@id`
+             client_id=@clientId, delivery_address=@deliveryAddress, discount_percent=@discountPercent, total_amount=@totalAmount,
+             status=@status WHERE id=@id`
         ).run({
           id: orderId,
           orderNumber,
@@ -1160,6 +1170,7 @@ export function registerIpcHandlers() {
           customerBirthDate: normalizedBirthDate,
           clientId,
           deliveryAddress,
+          discountPercent,
           totalAmount,
           status
         });
@@ -1168,8 +1179,8 @@ export function registerIpcHandlers() {
       } else {
         ensureInventoryAvailability();
         const insert = db.prepare(
-          `INSERT INTO orders (order_number, customer_first_name, customer_last_name, customer_instagram, customer_phone, customer_birth_date, client_id, delivery_address, total_amount, status)
-           VALUES (@orderNumber, @customerFirstName, @customerLastName, @customerInstagram, @customerPhone, @customerBirthDate, @clientId, @deliveryAddress, @totalAmount, @status)`
+          `INSERT INTO orders (order_number, customer_first_name, customer_last_name, customer_instagram, customer_phone, customer_birth_date, client_id, delivery_address, discount_percent, total_amount, status)
+           VALUES (@orderNumber, @customerFirstName, @customerLastName, @customerInstagram, @customerPhone, @customerBirthDate, @clientId, @deliveryAddress, @discountPercent, @totalAmount, @status)`
         );
         const result = insert.run({
           orderNumber,
@@ -1180,6 +1191,7 @@ export function registerIpcHandlers() {
           customerBirthDate: normalizedBirthDate,
           clientId,
           deliveryAddress,
+          discountPercent,
           totalAmount,
           status
         });
@@ -1203,7 +1215,7 @@ export function registerIpcHandlers() {
         }
       }
 
-      return { id: orderId, totalAmount };
+      return { id: orderId, totalAmount, discountPercent, discountAmount };
     });
 
     return execute();

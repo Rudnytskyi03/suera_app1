@@ -124,6 +124,7 @@ type OrderFormState = {
   deliveryAddress: string;
   status: Order['status'];
   items: OrderItemForm[];
+  orderDiscountPercent: number;
 };
 
 const defaultForm: OrderFormState = {
@@ -136,7 +137,8 @@ const defaultForm: OrderFormState = {
   clientId: null,
   deliveryAddress: '',
   status: 'new',
-  items: []
+  items: [],
+  orderDiscountPercent: 0
 };
 
 const OrdersPage: React.FC = () => {
@@ -348,6 +350,7 @@ const OrdersPage: React.FC = () => {
         clientId: order.client_id ?? null,
         deliveryAddress: order.delivery_address ?? '',
         status: order.status,
+        orderDiscountPercent: order.discount_percent ?? 0,
         items: order.items.map((item) => ({
           productId: item.id,
           quantity: item.quantity,
@@ -368,9 +371,25 @@ const OrdersPage: React.FC = () => {
     setFormState({ ...defaultForm });
   };
 
-  const totalAmount = useMemo(() => {
+  const subtotal = useMemo(() => {
     return formState.items.reduce((acc, item) => acc + (item.price - item.discount) * item.quantity, 0);
   }, [formState.items]);
+
+  const sanitizedOrderDiscount = useMemo(() => {
+    const value = Number(formState.orderDiscountPercent);
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, value));
+  }, [formState.orderDiscountPercent]);
+
+  const discountAmount = useMemo(() => {
+    return Math.round(((subtotal * sanitizedOrderDiscount) / 100) * 100) / 100;
+  }, [subtotal, sanitizedOrderDiscount]);
+
+  const totalAmount = useMemo(() => {
+    return Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+  }, [subtotal, discountAmount]);
 
   const handleItemChange = (index: number, field: 'productId' | 'quantity' | 'price' | 'discount', value: string) => {
     setFormState((prev) => {
@@ -571,7 +590,8 @@ const OrdersPage: React.FC = () => {
         deliveryAddress: formState.deliveryAddress,
         status: formState.status,
         clientId: formState.clientId ?? matchedClient?.id ?? null,
-        totalAmount,
+        totalAmount: Math.round(totalAmount * 100) / 100,
+        orderDiscountPercent: sanitizedOrderDiscount,
         items: payloadItems
       };
       await saveOrder(payload);
@@ -672,7 +692,18 @@ const OrdersPage: React.FC = () => {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-slate-500">{order.items.reduce((acc, item) => acc + item.quantity, 0)} шт</td>
-                  <td className="px-4 py-3 font-semibold text-slate-800">{order.total_amount.toLocaleString()} ₴</td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="font-semibold text-slate-800">{order.total_amount.toLocaleString()} ₴</div>
+                    {order.discount_percent > 0 && (
+                      <div className="text-xs font-medium text-pink-600">
+                        -
+                        {Number.isInteger(order.discount_percent)
+                          ? order.discount_percent.toFixed(0)
+                          : order.discount_percent.toFixed(1)}
+                        %
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-slate-500">{statuses.find((status) => status.value === order.status)?.label}</td>
                   <td className="px-4 py-3 text-slate-500">{formatDate(order.created_at)}</td>
                   <td className="px-4 py-3 text-right">
@@ -707,9 +738,10 @@ const OrdersPage: React.FC = () => {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-4xl rounded-3xl bg-white p-8 shadow-2xl">
-            <h2 className="text-xl font-semibold text-slate-900">{formState.id ? 'Редагування замовлення' : 'Нове замовлення'}</h2>
-            <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+          <div className="w-full max-w-4xl">
+            <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white p-6 sm:p-8 shadow-2xl">
+              <h2 className="text-xl font-semibold text-slate-900">{formState.id ? 'Редагування замовлення' : 'Нове замовлення'}</h2>
+              <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Номер замовлення</span>
@@ -845,6 +877,27 @@ const OrdersPage: React.FC = () => {
                       </option>
                     ))}
                 </select>
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-slate-600">Знижка на замовлення (%)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  value={formState.orderDiscountPercent}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    setFormState((prev) => ({
+                      ...prev,
+                      orderDiscountPercent: Number.isFinite(value)
+                        ? Math.min(100, Math.max(0, value))
+                        : 0
+                    }));
+                  }}
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                />
               </label>
 
               <div className="space-y-3">
@@ -1004,9 +1057,30 @@ const OrdersPage: React.FC = () => {
               </div>
 
               <div className="rounded-2xl bg-purple-50/40 p-4 text-sm text-slate-700">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 text-slate-800">
                   <Calendar className="h-4 w-4 text-purple-500" />
-                  <span className="font-semibold text-slate-800">Загальна сума: {totalAmount.toFixed(2)} ₴</span>
+                  <span className="font-semibold">Підсумок замовлення</span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Проміжна сума</span>
+                    <span>{subtotal.toFixed(2)} ₴</span>
+                  </div>
+                  {sanitizedOrderDiscount > 0 && (
+                    <div className="flex items-center justify-between text-pink-600">
+                      <span>
+                        Знижка ({Number.isInteger(sanitizedOrderDiscount)
+                          ? sanitizedOrderDiscount.toFixed(0)
+                          : sanitizedOrderDiscount.toFixed(1)}
+                        %)
+                      </span>
+                      <span>-{discountAmount.toFixed(2)} ₴</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between text-base font-semibold text-slate-800">
+                    <span>До оплати</span>
+                    <span>{totalAmount.toFixed(2)} ₴</span>
+                  </div>
                 </div>
               </div>
 
@@ -1025,7 +1099,8 @@ const OrdersPage: React.FC = () => {
                   Зберегти замовлення
                 </button>
               </div>
-            </form>
+              </form>
+            </div>
           </div>
         </div>
       )}

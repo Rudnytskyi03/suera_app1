@@ -24,6 +24,7 @@ export type SaveOrderInput = {
   status: 'new' | 'shipped' | 'returned' | 'completed';
   items: OrderItemInput[];
   totalAmount: number;
+  orderDiscountPercent: number;
   clientId?: number | null;
 };
 

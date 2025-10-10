@@ -503,10 +503,10 @@ const ProductsPage: React.FC = () => {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
-          <div className="mx-auto flex min-h-full w-full max-w-3xl items-start justify-center">
-            <div className="w-full overflow-hidden rounded-3xl bg-white shadow-2xl">
-              <div className="max-h-[90vh] overflow-y-auto p-6 sm:p-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-3xl">
+            <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white shadow-2xl">
+              <div className="p-6 sm:p-8">
                 <h2 className="text-xl font-semibold text-slate-900">{formState.id ? 'Редагування товару' : 'Новий товар'}</h2>
                 <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
               <div className="grid gap-4 md:grid-cols-2">
