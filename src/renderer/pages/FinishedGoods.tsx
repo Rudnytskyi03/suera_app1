@@ -23,16 +23,17 @@ const COMPONENT_LABELS: Record<FinishedComponentType, string> = {
   garter: 'Гартер'
 };
 
+type ComponentSizeBreakdown = {
+  size: string;
+  quantity: number;
+};
+
 type GroupedInventoryRow = {
   productId: number;
   productName: string;
   totalSets: number;
   totalsByComponent: Record<FinishedComponentType, number>;
-  sizes: {
-    size: string;
-    totalSets: number;
-    components: Record<FinishedComponentType, number>;
-  }[];
+  componentSizes: Record<FinishedComponentType, ComponentSizeBreakdown[]>;
 };
 
 type ProductionFormState = {
@@ -122,22 +123,44 @@ const FinishedGoodsPage: React.FC = () => {
             belt: 0,
             garter: 0
           },
-          sizes: []
+          componentSizes: {
+            bra: [],
+            panties: [],
+            belt: [],
+            garter: []
+          }
         });
       }
 
       const group = groups.get(entry.productId)!;
-      group.totalSets += entry.totalSets;
-      group.sizes.push({
-        size: entry.size,
-        totalSets: entry.totalSets,
-        components: entry.components
-      });
 
       FINISHED_COMPONENTS.forEach((component) => {
-        group.totalsByComponent[component] += entry.components[component] ?? 0;
+        const quantity = entry.components[component] ?? 0;
+        if (quantity > 0) {
+          const sizeEntries = group.componentSizes[component];
+          const existingSize = sizeEntries.find((item) => item.size === entry.size);
+          if (existingSize) {
+            existingSize.quantity += quantity;
+          } else {
+            sizeEntries.push({ size: entry.size, quantity });
+          }
+        }
+        group.totalsByComponent[component] += quantity;
       });
     });
+
+    for (const group of groups.values()) {
+      const componentTotals = FINISHED_COMPONENTS.map((component) => group.totalsByComponent[component] ?? 0);
+      if (componentTotals.some((value) => value <= 0)) {
+        group.totalSets = 0;
+      } else {
+        group.totalSets = Math.min(...componentTotals);
+      }
+
+      for (const component of FINISHED_COMPONENTS) {
+        group.componentSizes[component].sort((a, b) => a.size.localeCompare(b.size, 'uk', { sensitivity: 'base' }));
+      }
+    }
 
     return Array.from(groups.values()).sort((a, b) =>
       a.productName.localeCompare(b.productName, 'uk', { sensitivity: 'base' })
@@ -145,12 +168,15 @@ const FinishedGoodsPage: React.FC = () => {
   }, [inventory]);
 
   const inventorySummary = useMemo(() => {
-    const baseTotals = inventory.reduce(
+    const totals = groupedInventory.reduce(
       (acc, entry) => {
-        const totalPieces = FINISHED_COMPONENTS.reduce((sum, component) => sum + entry.components[component], 0);
+        const pieces = FINISHED_COMPONENTS.reduce(
+          (sum, component) => sum + (entry.totalsByComponent[component] ?? 0),
+          0
+        );
         return {
           totalSets: acc.totalSets + entry.totalSets,
-          totalPieces: acc.totalPieces + totalPieces
+          totalPieces: acc.totalPieces + pieces
         };
       },
       { totalSets: 0, totalPieces: 0 }
@@ -158,10 +184,10 @@ const FinishedGoodsPage: React.FC = () => {
 
     return {
       totalProducts: groupedInventory.length,
-      totalSets: baseTotals.totalSets,
-      totalPieces: baseTotals.totalPieces
+      totalSets: totals.totalSets,
+      totalPieces: totals.totalPieces
     };
-  }, [groupedInventory, inventory]);
+  }, [groupedInventory]);
 
   const handleFormChange = <K extends keyof ProductionFormState>(key: K, value: ProductionFormState[K]) => {
     setFormState((prev) => ({ ...prev, [key]: value }));
@@ -372,7 +398,8 @@ const FinishedGoodsPage: React.FC = () => {
                 <thead className="bg-slate-50/70 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-4 py-3 text-left">Товар</th>
-                    <th className="px-4 py-3 text-left">Розміри</th>
+                    <th className="px-4 py-3 text-left">Розміри бра</th>
+                    <th className="px-4 py-3 text-left">Розміри трусиків</th>
                     <th className="px-4 py-3 text-left">Компоненти</th>
                     <th className="px-4 py-3 text-right">Комплектів</th>
                   </tr>
@@ -382,16 +409,36 @@ const FinishedGoodsPage: React.FC = () => {
                     <tr key={entry.productId} className="hover:bg-purple-50/40">
                       <td className="px-4 py-3 font-medium text-slate-800">{entry.productName}</td>
                       <td className="px-4 py-3 text-xs text-slate-600">
-                        <div className="flex flex-wrap gap-2">
-                          {entry.sizes.map((sizeInfo) => (
-                            <span
-                              key={`${entry.productId}-${sizeInfo.size}`}
-                              className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600"
-                            >
-                              {sizeInfo.size}: {sizeInfo.totalSets}
-                            </span>
-                          ))}
-                        </div>
+                        {entry.componentSizes.bra.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {entry.componentSizes.bra.map((item) => (
+                              <span
+                                key={`bra-${entry.productId}-${item.size}`}
+                                className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600"
+                              >
+                                {item.size}: {item.quantity}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">Немає даних</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-slate-600">
+                        {entry.componentSizes.panties.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {entry.componentSizes.panties.map((item) => (
+                              <span
+                                key={`panties-${entry.productId}-${item.size}`}
+                                className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600"
+                              >
+                                {item.size}: {item.quantity}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">Немає даних</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-600">
                         <div className="flex flex-wrap gap-2">
@@ -415,7 +462,7 @@ const FinishedGoodsPage: React.FC = () => {
                   ))}
                   {groupedInventory.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-4 py-6 text-center text-sm text-slate-500">
+                      <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">
                         Немає готових виробів на складі.
                       </td>
                     </tr>

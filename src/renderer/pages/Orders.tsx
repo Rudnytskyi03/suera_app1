@@ -985,7 +985,24 @@ const OrdersPage: React.FC = () => {
                 <div className="space-y-3">
                   {formState.items.map((item, index) => {
                     const productInventory = finishedInventory.filter((entry) => entry.productId === item.productId);
-                    const setsAvailable = productInventory.reduce((acc, entry) => acc + entry.totalSets, 0);
+                    const totalsByComponent = FINISHED_COMPONENTS.reduce<Record<FinishedComponentType, number>>(
+                      (acc, component) => {
+                        acc[component] = productInventory.reduce(
+                          (sum, entry) => sum + (entry.components[component] ?? 0),
+                          0
+                        );
+                        return acc;
+                      },
+                      {
+                        bra: 0,
+                        panties: 0,
+                        belt: 0,
+                        garter: 0
+                      }
+                    );
+                    const setsAvailable = Math.min(
+                      ...FINISHED_COMPONENTS.map((component) => totalsByComponent[component] ?? 0)
+                    );
                     return (
                       <div key={index} className="space-y-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-sm">
                         <div className="grid gap-3 md:grid-cols-[1.5fr_repeat(3,1fr)_auto]">
