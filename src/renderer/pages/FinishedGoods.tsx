@@ -23,6 +23,18 @@ const COMPONENT_LABELS: Record<FinishedComponentType, string> = {
   garter: 'Гартер'
 };
 
+type GroupedInventoryRow = {
+  productId: number;
+  productName: string;
+  totalSets: number;
+  totalsByComponent: Record<FinishedComponentType, number>;
+  sizes: {
+    size: string;
+    totalSets: number;
+    components: Record<FinishedComponentType, number>;
+  }[];
+};
+
 type ProductionFormState = {
   productId: number;
   size: string;
@@ -95,19 +107,61 @@ const FinishedGoodsPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const groupedInventory = useMemo(() => {
+    const groups = new Map<number, GroupedInventoryRow>();
+
+    inventory.forEach((entry) => {
+      if (!groups.has(entry.productId)) {
+        groups.set(entry.productId, {
+          productId: entry.productId,
+          productName: entry.productName,
+          totalSets: 0,
+          totalsByComponent: {
+            bra: 0,
+            panties: 0,
+            belt: 0,
+            garter: 0
+          },
+          sizes: []
+        });
+      }
+
+      const group = groups.get(entry.productId)!;
+      group.totalSets += entry.totalSets;
+      group.sizes.push({
+        size: entry.size,
+        totalSets: entry.totalSets,
+        components: entry.components
+      });
+
+      FINISHED_COMPONENTS.forEach((component) => {
+        group.totalsByComponent[component] += entry.components[component] ?? 0;
+      });
+    });
+
+    return Array.from(groups.values()).sort((a, b) =>
+      a.productName.localeCompare(b.productName, 'uk', { sensitivity: 'base' })
+    );
+  }, [inventory]);
+
   const inventorySummary = useMemo(() => {
-    return inventory.reduce(
+    const baseTotals = inventory.reduce(
       (acc, entry) => {
         const totalPieces = FINISHED_COMPONENTS.reduce((sum, component) => sum + entry.components[component], 0);
         return {
-          totalEntries: acc.totalEntries + 1,
           totalSets: acc.totalSets + entry.totalSets,
           totalPieces: acc.totalPieces + totalPieces
         };
       },
-      { totalEntries: 0, totalSets: 0, totalPieces: 0 }
+      { totalSets: 0, totalPieces: 0 }
     );
-  }, [inventory]);
+
+    return {
+      totalProducts: groupedInventory.length,
+      totalSets: baseTotals.totalSets,
+      totalPieces: baseTotals.totalPieces
+    };
+  }, [groupedInventory, inventory]);
 
   const handleFormChange = <K extends keyof ProductionFormState>(key: K, value: ProductionFormState[K]) => {
     setFormState((prev) => ({ ...prev, [key]: value }));
@@ -292,7 +346,7 @@ const FinishedGoodsPage: React.FC = () => {
       <div className="grid gap-6 md:grid-cols-3">
         <div className="rounded-3xl bg-white/80 p-6 shadow-xl">
           <div className="text-sm font-medium text-slate-500">Загалом позицій</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">{inventorySummary.totalEntries}</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{inventorySummary.totalProducts}</div>
         </div>
         <div className="rounded-3xl bg-white/80 p-6 shadow-xl">
           <div className="text-sm font-medium text-slate-500">Доступних комплектів</div>
@@ -310,7 +364,7 @@ const FinishedGoodsPage: React.FC = () => {
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-slate-800">Склад готової продукції</h3>
               <div className="rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-600">
-                {inventory.length} позицій
+                {groupedInventory.length} позицій
               </div>
             </div>
             <div className="overflow-hidden rounded-2xl border border-slate-100">
@@ -318,16 +372,27 @@ const FinishedGoodsPage: React.FC = () => {
                 <thead className="bg-slate-50/70 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-4 py-3 text-left">Товар</th>
-                    <th className="px-4 py-3 text-left">Розмір</th>
+                    <th className="px-4 py-3 text-left">Розміри</th>
                     <th className="px-4 py-3 text-left">Компоненти</th>
                     <th className="px-4 py-3 text-right">Комплектів</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {inventory.map((entry) => (
-                    <tr key={`${entry.productId}-${entry.size}`} className="hover:bg-purple-50/40">
+                  {groupedInventory.map((entry) => (
+                    <tr key={entry.productId} className="hover:bg-purple-50/40">
                       <td className="px-4 py-3 font-medium text-slate-800">{entry.productName}</td>
-                      <td className="px-4 py-3 text-slate-600">{entry.size}</td>
+                      <td className="px-4 py-3 text-xs text-slate-600">
+                        <div className="flex flex-wrap gap-2">
+                          {entry.sizes.map((sizeInfo) => (
+                            <span
+                              key={`${entry.productId}-${sizeInfo.size}`}
+                              className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600"
+                            >
+                              {sizeInfo.size}: {sizeInfo.totalSets}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-xs text-slate-600">
                         <div className="flex flex-wrap gap-2">
                           {FINISHED_COMPONENTS.map((component) => (
@@ -335,12 +400,12 @@ const FinishedGoodsPage: React.FC = () => {
                               key={component}
                               className={clsx(
                                 'rounded-full px-3 py-1 text-xs font-semibold',
-                                entry.components[component] > 0
+                                entry.totalsByComponent[component] > 0
                                   ? 'bg-purple-100 text-purple-700'
                                   : 'bg-slate-100 text-slate-500'
                               )}
                             >
-                              {COMPONENT_LABELS[component]}: {entry.components[component]}
+                              {COMPONENT_LABELS[component]}: {entry.totalsByComponent[component]}
                             </span>
                           ))}
                         </div>
@@ -348,7 +413,7 @@ const FinishedGoodsPage: React.FC = () => {
                       <td className="px-4 py-3 text-right font-semibold text-slate-800">{entry.totalSets}</td>
                     </tr>
                   ))}
-                  {inventory.length === 0 && (
+                  {groupedInventory.length === 0 && (
                     <tr>
                       <td colSpan={4} className="px-4 py-6 text-center text-sm text-slate-500">
                         Немає готових виробів на складі.
