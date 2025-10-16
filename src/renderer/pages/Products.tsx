@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BadgePercent, ImagePlus, PackagePlus, PlusCircle, Search, ShoppingBag, Trash2, X } from 'lucide-react';
-import { fetchProducts, saveProduct, deleteProduct } from '../services/productsService';
+import { BadgePercent, Copy, ImagePlus, PackagePlus, PlusCircle, Search, ShoppingBag, Trash2, X } from 'lucide-react';
+import { fetchProducts, saveProduct, deleteProduct, duplicateProduct } from '../services/productsService';
 import { fetchMaterials } from '../services/materialsService';
 import { DiscountType, Material, Product, ProductExpense, ProductPhoto } from '../types';
 import { PageHeader } from '../components/PageHeader';
@@ -9,7 +9,7 @@ import { useToast } from '../components/ToastProvider';
 const PRODUCTION_EXPENSE_LABELS = ['Пошив'];
 const UNIT_LABELS: Record<Material['unit'], string> = {
   meters: 'м',
-  pieces: 'шт'
+  pieces: 'шт.'
 };
 
 type PendingPhoto = {
@@ -313,18 +313,28 @@ const ProductsPage: React.FC = () => {
     }
   };
 
+  const handleDuplicate = async (product: Product) => {
+    try {
+      await duplicateProduct(product.id);
+      showToast({ title: `Товар «${product.name}» продубльовано`, type: 'success' });
+      await loadData();
+    } catch (error: any) {
+      showToast({ title: 'Не вдалося дублювати товар', description: error.message, type: 'error' });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         icon={ShoppingBag}
-        title="Товары"
+        title="Товари"
         description="Створюйте та керуйте товарами, розраховуйте собівартість та прибуток."
         actions={
           <button
             onClick={() => openModal()}
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl"
           >
-            <PackagePlus className="h-4 w-4" /> Добавить товар
+            <PackagePlus className="h-4 w-4" /> Додати товар
           </button>
         }
       />
@@ -336,7 +346,7 @@ const ProductsPage: React.FC = () => {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Пошук по товарам"
+              placeholder="Пошук за товарами"
               className="w-full bg-transparent text-sm outline-none"
             />
           </label>
@@ -475,7 +485,13 @@ const ProductsPage: React.FC = () => {
                     комплектів із поточних запасів.
                   </div>
 
-                  <div className="mt-auto flex gap-2">
+                  <div className="mt-auto flex flex-wrap gap-2">
+                    <button
+                      onClick={() => handleDuplicate(product)}
+                      className="flex-1 rounded-xl bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-600 shadow-sm transition hover:bg-indigo-100"
+                    >
+                      <Copy className="mr-1 inline h-4 w-4" /> Дублювати
+                    </button>
                     <button
                       onClick={() => openModal(product)}
                       className="flex-1 rounded-xl bg-purple-600/90 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:bg-purple-600"
@@ -484,7 +500,7 @@ const ProductsPage: React.FC = () => {
                     </button>
                     <button
                       onClick={() => handleDelete(product)}
-                      className="rounded-xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
+                      className="flex-1 rounded-xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-500 shadow-sm transition hover:bg-rose-100"
                     >
                       Видалити
                     </button>
@@ -553,7 +569,10 @@ const ProductsPage: React.FC = () => {
                 </div>
                 <div className="space-y-3">
                   {formState.materials.map((item, index) => (
-                    <div key={index} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm md:grid-cols-[1.5fr_1fr_auto]">
+                    <div
+                      key={index}
+                      className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm md:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_auto] md:items-center"
+                    >
                       <select
                         value={item.materialId}
                         onChange={(event) => handleMaterialChange(index, 'materialId', event.target.value)}
@@ -568,7 +587,7 @@ const ProductsPage: React.FC = () => {
                       <input
                         type="number"
                         min={0}
-                        step={0.1}
+                        step="any"
                         value={item.quantity}
                         onChange={(event) => handleMaterialChange(index, 'quantity', event.target.value)}
                         className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
@@ -586,7 +605,7 @@ const ProductsPage: React.FC = () => {
                         {selectedMaterialDetails[index]?.material && (
                           <span>
                             Залишок: {selectedMaterialDetails[index]?.available}{' '}
-                            {UNIT_LABELS[selectedMaterialDetails[index]?.material?.unit ?? 'шт']}
+                            {UNIT_LABELS[selectedMaterialDetails[index]?.material?.unit ?? 'pieces']}
                           </span>
                         )}
                       </div>

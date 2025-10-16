@@ -22,7 +22,7 @@ import { useToast } from '../components/ToastProvider';
 import { differenceInCalendarDays, format, isBefore, parseISO, setYear, startOfDay } from 'date-fns';
 
 const statuses = [
-  { value: 'all', label: 'Все статусы' },
+  { value: 'all', label: 'Усі статуси' },
   { value: 'new', label: '🆕 Нове' },
   { value: 'shipped', label: '📦 Відправлено' },
   { value: 'returned', label: '↩️ Повернуто' },
@@ -688,14 +688,14 @@ const OrdersPage: React.FC = () => {
     <div className="space-y-6">
       <PageHeader
         icon={ShoppingCart}
-        title="Заказы"
+        title="Замовлення"
         description="Створюйте замовлення, слідкуйте за статусами та клієнтами."
         actions={
           <button
             onClick={() => openModal()}
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl"
           >
-            <FilePlus2 className="h-4 w-4" /> Создать заказ
+            <FilePlus2 className="h-4 w-4" /> Створити замовлення
           </button>
         }
       />
@@ -707,7 +707,7 @@ const OrdersPage: React.FC = () => {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Пошук по номеру, клієнту чи телефону"
+              placeholder="Пошук за номером, клієнтом чи телефоном"
               className="w-full bg-transparent text-sm outline-none"
             />
           </label>
@@ -715,7 +715,9 @@ const OrdersPage: React.FC = () => {
             <Filter className="h-4 w-4 text-purple-500" />
             <select
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as any)}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as (typeof statuses)[number]['value'])
+              }
               className="w-full bg-transparent text-sm outline-none"
             >
               {statuses.map((status) => (
@@ -760,7 +762,7 @@ const OrdersPage: React.FC = () => {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-500">{order.items.reduce((acc, item) => acc + item.quantity, 0)} шт</td>
+                  <td className="px-4 py-3 text-slate-500">{order.items.reduce((acc, item) => acc + item.quantity, 0)} шт.</td>
                   <td className="px-4 py-3 text-right">
                     <div className="font-semibold text-slate-800">{order.total_amount.toLocaleString()} ₴</div>
                     {order.discount_percent > 0 && (

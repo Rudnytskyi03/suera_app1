@@ -20,7 +20,8 @@ contextBridge.exposeInMainWorld('api', {
   products: {
     list: () => ipcRenderer.invoke('products:list'),
     save: (product: any) => ipcRenderer.invoke('products:save', product),
-    delete: (id: number) => ipcRenderer.invoke('products:delete', id)
+    delete: (id: number) => ipcRenderer.invoke('products:delete', id),
+    duplicate: (id: number) => ipcRenderer.invoke('products:duplicate', id)
   },
   orders: {
     list: () => ipcRenderer.invoke('orders:list'),

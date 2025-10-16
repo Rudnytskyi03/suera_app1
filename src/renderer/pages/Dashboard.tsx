@@ -9,12 +9,12 @@ import ClientsPage from './Clients';
 import FinishedGoodsPage from './FinishedGoods';
 
 const navigation = [
-  { id: 'materials', name: 'Материалы', icon: Package },
-  { id: 'products', name: 'Товары', icon: ShoppingBag },
-  { id: 'finished', name: 'Отшитые', icon: Layers },
-  { id: 'orders', name: 'Заказы', icon: ShoppingCart },
-  { id: 'clients', name: 'Клиенты', icon: Users },
-  { id: 'reports', name: 'Отчеты', icon: BarChart3 }
+  { id: 'materials', name: 'Матеріали', icon: Package },
+  { id: 'products', name: 'Товари', icon: ShoppingBag },
+  { id: 'finished', name: 'Відшиті', icon: Layers },
+  { id: 'orders', name: 'Замовлення', icon: ShoppingCart },
+  { id: 'clients', name: 'Клієнти', icon: Users },
+  { id: 'reports', name: 'Звіти', icon: BarChart3 }
 ] as const;
 
 type DashboardProps = {
@@ -59,7 +59,7 @@ const Dashboard: React.FC<DashboardProps> = ({ email, onLogout }) => {
           <div className="rounded-xl bg-white/20 p-3 text-2xl">🎁</div>
           <div>
             <p className="text-xs uppercase tracking-widest text-white/60">Lingerie Brand</p>
-            <h2 className="text-lg font-semibold">Система управления</h2>
+            <h2 className="text-lg font-semibold">Система керування</h2>
           </div>
         </div>
         <nav className="mt-10 flex flex-1 flex-col gap-2">
@@ -114,7 +114,7 @@ const Dashboard: React.FC<DashboardProps> = ({ email, onLogout }) => {
               </button>
               <div>
                 <p className="text-xs uppercase tracking-widest text-slate-400">Lingerie Brand</p>
-                <h1 className="text-lg font-semibold text-slate-800">Система управления</h1>
+                <h1 className="text-lg font-semibold text-slate-800">Система керування</h1>
               </div>
             </div>
             <div className="hidden md:flex md:flex-col">

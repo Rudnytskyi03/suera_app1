@@ -928,6 +928,123 @@ export function registerIpcHandlers() {
     return { success: true };
   });
 
+  ipcMain.handle('products:duplicate', (_event, productId: number) => {
+    ensurePhotosDirectory();
+
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as ProductRecord | undefined;
+    if (!product) {
+      throw new Error('Товар не знайдено для дублювання');
+    }
+
+    const materials = db
+      .prepare('SELECT material_id, quantity FROM product_materials WHERE product_id = ?')
+      .all(productId) as Array<{ material_id: number; quantity: number }>;
+    const expenses = db
+      .prepare('SELECT label, amount FROM product_expenses WHERE product_id = ? ORDER BY id')
+      .all(productId) as Array<{ label: string; amount: number }>;
+    const photos = db
+      .prepare('SELECT file_path FROM product_photos WHERE product_id = ? ORDER BY id')
+      .all(productId) as Array<{ file_path: string }>;
+
+    const trimmedName = product.name?.trim() ?? '';
+    const baseName = trimmedName.length > 0 ? trimmedName : 'Товар';
+    let candidateName = `${baseName} (копія)`;
+    let suffix = 2;
+    const nameCheck = db.prepare('SELECT COUNT(1) as count FROM products WHERE name = ?');
+    while ((nameCheck.get(candidateName) as { count: number }).count > 0) {
+      candidateName = `${baseName} (копія ${suffix})`;
+      suffix += 1;
+    }
+
+    const insertProduct = db.prepare(
+      `INSERT INTO products (
+         name,
+         description,
+         materials_cost,
+         additional_cost,
+         cost_price,
+         sewing_cost,
+         packaging_cost,
+         shipping_cost,
+         advertising_cost,
+         sale_price,
+         discount_type,
+         discount_value,
+         profit
+       ) VALUES (
+         @name,
+         @description,
+         @materials_cost,
+         @additional_cost,
+         @cost_price,
+         @sewing_cost,
+         @packaging_cost,
+         @shipping_cost,
+         @advertising_cost,
+         @sale_price,
+         @discount_type,
+         @discount_value,
+         @profit
+       )`
+    );
+
+    const result = insertProduct.run({
+      name: candidateName,
+      description: product.description,
+      materials_cost: product.materials_cost,
+      additional_cost: product.additional_cost,
+      cost_price: product.cost_price,
+      sewing_cost: product.sewing_cost,
+      packaging_cost: product.packaging_cost,
+      shipping_cost: product.shipping_cost,
+      advertising_cost: product.advertising_cost,
+      sale_price: product.sale_price,
+      discount_type: product.discount_type,
+      discount_value: product.discount_value,
+      profit: product.profit
+    });
+
+    const newProductId = Number(result.lastInsertRowid);
+
+    const insertMaterial = db.prepare(
+      'INSERT INTO product_materials (product_id, material_id, quantity) VALUES (?, ?, ?)' as const
+    );
+    const insertMaterialsTxn = db.transaction((rows: typeof materials) => {
+      for (const row of rows) {
+        insertMaterial.run(newProductId, row.material_id, row.quantity);
+      }
+    });
+    insertMaterialsTxn(materials);
+
+    const insertExpense = db.prepare(
+      'INSERT INTO product_expenses (product_id, label, amount) VALUES (?, ?, ?)' as const
+    );
+    const insertExpensesTxn = db.transaction((rows: typeof expenses) => {
+      for (const row of rows) {
+        insertExpense.run(newProductId, row.label, row.amount);
+      }
+    });
+    insertExpensesTxn(expenses);
+
+    const insertPhoto = db.prepare('INSERT INTO product_photos (product_id, file_path) VALUES (?, ?)');
+    for (const photo of photos) {
+      const source = resolvePhotoPath(photo.file_path);
+      if (!source || !fs.existsSync(source)) {
+        continue;
+      }
+      const destinationRelative = generatePhotoRelativePath(path.basename(photo.file_path) || 'photo');
+      const destinationAbsolute = path.join(app.getPath('userData'), destinationRelative);
+      try {
+        fs.copyFileSync(source, destinationAbsolute);
+        insertPhoto.run(newProductId, destinationRelative);
+      } catch (error) {
+        console.error('Не вдалося дублювати фото товару', error);
+      }
+    }
+
+    return { id: newProductId };
+  });
+
   ipcMain.handle('orders:list', () => {
     const orders = db.prepare('SELECT * FROM orders ORDER BY datetime(created_at) DESC').all() as OrderRecord[];
     const itemsStmt = db.prepare(

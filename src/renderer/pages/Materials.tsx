@@ -13,18 +13,26 @@ import { useToast } from '../components/ToastProvider';
 import { PageHeader } from '../components/PageHeader';
 
 const units: Array<{ value: Material['unit']; label: string }> = [
-  { value: 'meters', label: 'Метры' },
-  { value: 'pieces', label: 'Штуки' }
+  { value: 'meters', label: 'Метри' },
+  { value: 'pieces', label: 'Шт.' }
 ];
 
-const categories = ['Все категории', 'Модал', 'Бейка', 'Резинка', 'Аксессуары'];
+const categories = ['Усі категорії', 'Модал', 'Бейка', 'Гумка', 'Аксесуари'];
 
-const defaultForm = {
+type MaterialFormState = {
+  name: string;
+  category: string;
+  unit: Material['unit'];
+  quantity: string;
+  pricePerUnit: string;
+};
+
+const defaultForm: MaterialFormState = {
   name: '',
   category: 'Модал',
-  unit: 'meters' as Material['unit'],
-  quantity: 0,
-  pricePerUnit: 0
+  unit: 'meters',
+  quantity: '',
+  pricePerUnit: ''
 };
 
 type PendingPhoto = {
@@ -42,9 +50,9 @@ const createDefaultReceiptForm = () => ({
 const MaterialsPage: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('Все категории');
+  const [category, setCategory] = useState('Усі категорії');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formState, setFormState] = useState(defaultForm);
+  const [formState, setFormState] = useState<MaterialFormState>({ ...defaultForm });
   const [existingPhoto, setExistingPhoto] = useState<{ url: string; path: string | null } | null>(null);
   const [pendingPhoto, setPendingPhoto] = useState<PendingPhoto | null>(null);
   const [originalPhotoPath, setOriginalPhotoPath] = useState<string | null>(null);
@@ -66,7 +74,7 @@ const MaterialsPage: React.FC = () => {
   const filteredMaterials = useMemo(() => {
     return materials.filter((material) => {
       const matchesSearch = material.name.toLowerCase().includes(search.toLowerCase());
-      const matchesCategory = category === 'Все категории' || material.category === category;
+      const matchesCategory = category === 'Усі категорії' || material.category === category;
       return matchesSearch && matchesCategory;
     });
   }, [materials, search, category]);
@@ -85,8 +93,8 @@ const MaterialsPage: React.FC = () => {
         name: material.name,
         category: material.category,
         unit: material.unit,
-        quantity: material.quantity,
-        pricePerUnit: material.pricePerUnit
+        quantity: material.quantity.toString(),
+        pricePerUnit: material.pricePerUnit.toString()
       });
       setExistingPhoto(
         material.photoUrl
@@ -135,12 +143,23 @@ const MaterialsPage: React.FC = () => {
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
+      const quantity = Number(String(formState.quantity).replace(',', '.'));
+      const pricePerUnit = Number(String(formState.pricePerUnit).replace(',', '.'));
+
+      if (!Number.isFinite(quantity) || quantity < 0) {
+        throw new Error('Будь ласка, введіть коректну кількість.');
+      }
+
+      if (!Number.isFinite(pricePerUnit) || pricePerUnit < 0) {
+        throw new Error('Будь ласка, введіть коректну ціну.');
+      }
+
       const payload: MaterialSaveInput = {
         name: formState.name,
         category: formState.category,
         unit: formState.unit,
-        quantity: formState.quantity,
-        pricePerUnit: formState.pricePerUnit
+        quantity,
+        pricePerUnit
       };
 
       if (pendingPhoto) {
@@ -220,8 +239,8 @@ const MaterialsPage: React.FC = () => {
       return;
     }
 
-    const quantity = Number(receiptForm.quantity);
-    const unitPrice = Number(receiptForm.unitPrice);
+    const quantity = Number(String(receiptForm.quantity).replace(',', '.'));
+    const unitPrice = Number(String(receiptForm.unitPrice).replace(',', '.'));
 
     if (!Number.isFinite(quantity) || quantity <= 0) {
       showToast({ title: 'Кількість повинна бути більшою за 0', type: 'error' });
@@ -252,14 +271,14 @@ const MaterialsPage: React.FC = () => {
     <div className="space-y-6">
       <PageHeader
         icon={Tag}
-        title="Материалы"
+        title="Матеріали"
         description="Керуйте залишками матеріалів, ведіть облік та завантажуйте фото."
         actions={
           <button
             onClick={() => handleOpenModal()}
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl"
           >
-            <Plus className="h-4 w-4" /> Добавить материал
+            <Plus className="h-4 w-4" /> Додати матеріал
           </button>
         }
       />
@@ -271,7 +290,7 @@ const MaterialsPage: React.FC = () => {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Пошук по назві..."
+              placeholder="Пошук за назвою..."
               className="w-full bg-transparent text-sm outline-none"
             />
           </label>
@@ -332,7 +351,7 @@ const MaterialsPage: React.FC = () => {
                         onClick={() => handleOpenReceiptModal(material)}
                         className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-600 shadow-sm transition hover:bg-emerald-100"
                       >
-                        <ArrowDownToLine className="mr-1 inline h-4 w-4" /> Приход
+                        <ArrowDownToLine className="mr-1 inline h-4 w-4" /> Прихід
                       </button>
                       <button
                         onClick={() => handleOpenModal(material)}
@@ -376,7 +395,7 @@ const MaterialsPage: React.FC = () => {
                   <input
                     type="number"
                     min={0.01}
-                    step={0.01}
+                    step="any"
                     value={receiptForm.quantity}
                     onChange={(event) => setReceiptForm({ ...receiptForm, quantity: event.target.value })}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
@@ -388,7 +407,7 @@ const MaterialsPage: React.FC = () => {
                   <input
                     type="number"
                     min={0}
-                    step={0.01}
+                    step="any"
                     value={receiptForm.unitPrice}
                     onChange={(event) => setReceiptForm({ ...receiptForm, unitPrice: event.target.value })}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
@@ -485,9 +504,9 @@ const MaterialsPage: React.FC = () => {
                   <input
                     type="number"
                     min={0}
-                    step={0.1}
+                    step="any"
                     value={formState.quantity}
-                    onChange={(event) => setFormState({ ...formState, quantity: Number(event.target.value) })}
+                    onChange={(event) => setFormState({ ...formState, quantity: event.target.value })}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
                     required
                   />
@@ -499,9 +518,9 @@ const MaterialsPage: React.FC = () => {
                   <input
                     type="number"
                     min={0}
-                    step={0.1}
+                    step="any"
                     value={formState.pricePerUnit}
-                    onChange={(event) => setFormState({ ...formState, pricePerUnit: Number(event.target.value) })}
+                    onChange={(event) => setFormState({ ...formState, pricePerUnit: event.target.value })}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
                     required
                   />

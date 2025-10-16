@@ -245,7 +245,7 @@ const ClientsPage: React.FC = () => {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Пошук по імені, Instagram чи телефону"
+              placeholder="Пошук за ім'ям, Instagram чи телефоном"
               className="w-full bg-transparent text-sm outline-none"
             />
           </label>

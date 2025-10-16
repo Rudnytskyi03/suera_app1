@@ -30,6 +30,7 @@ declare global {
         list: () => Promise<any[]>;
         save: (product: SaveProductInput) => Promise<any>;
         delete: (id: number) => Promise<{ success: boolean }>;
+        duplicate: (id: number) => Promise<{ id: number }>;
       };
       orders: {
         list: () => Promise<any[]>;

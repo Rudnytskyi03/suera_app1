@@ -30,7 +30,7 @@ const ReportsPage: React.FC = () => {
     <div className="space-y-6">
       <PageHeader
         icon={BarChart3}
-        title="Отчеты и аналитика"
+        title="Звіти та аналітика"
         description="Відстежуйте показники бізнесу, продажі та ефективність."
       />
 

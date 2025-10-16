@@ -39,7 +39,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           <div>
             <span className="inline-flex items-center gap-2 rounded-full bg-white/20 px-4 py-1 text-sm font-medium">
               <ShieldCheck className="h-4 w-4" />
-              Secure Access
+              Захищений доступ
             </span>
             <h2 className="mt-6 text-3xl font-bold">🎁 Lingerie Brand</h2>
             <p className="mt-3 text-sm text-purple-100">Система управління для авторизованих співробітників бренду.</p>
@@ -106,7 +106,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               </>
             ) : (
               <>
-                Войти
+                Увійти
                 <span className="transition-transform group-hover:translate-x-1">🔐</span>
               </>
             )}

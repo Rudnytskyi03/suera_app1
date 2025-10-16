@@ -23,3 +23,7 @@ export async function saveProduct(product: SaveProductInput) {
 export async function deleteProduct(id: number) {
   return window.api.products.delete(id);
 }
+
+export async function duplicateProduct(id: number) {
+  return window.api.products.duplicate(id);
+}

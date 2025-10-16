@@ -149,7 +149,7 @@ const FinishedGoodsPage: React.FC = () => {
     <div className="space-y-6">
       <PageHeader
         icon={Layers}
-        title="Отшиті вироби"
+        title="Відшиті вироби"
         description="Контролюйте склад готової продукції та оперативно додавайте нові партії."
       />
 
@@ -370,7 +370,7 @@ const FinishedGoodsPage: React.FC = () => {
                       {COMPONENT_LABELS[stat.component]} • {stat.size}
                     </div>
                   </div>
-                  <div className="text-sm font-semibold text-purple-600">{stat.sold} шт</div>
+                    <div className="text-sm font-semibold text-purple-600">{stat.sold} шт.</div>
                 </div>
               ))}
               {sizeStats.length === 0 && (
