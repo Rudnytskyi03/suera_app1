@@ -11,6 +11,10 @@ export type RecordProductionInput = {
   components: ProductionComponentInput;
 };
 
+export type UpdateProductionBatchInput = RecordProductionInput & {
+  batchId: number;
+};
+
 export async function fetchFinishedInventory(): Promise<FinishedInventoryEntry[]> {
   return window.api.finished.list();
 }
@@ -25,4 +29,12 @@ export async function fetchSizeSalesStats(): Promise<FinishedSizeStat[]> {
 
 export async function recordProduction(input: RecordProductionInput) {
   return window.api.finished.produce(input);
+}
+
+export async function updateProductionBatch(input: UpdateProductionBatchInput) {
+  return window.api.finished.update(input);
+}
+
+export async function deleteProductionBatch(batchId: number) {
+  return window.api.finished.delete(batchId);
 }

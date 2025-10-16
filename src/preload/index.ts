@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
   finished: {
     list: () => ipcRenderer.invoke('finished:list'),
     produce: (payload: any) => ipcRenderer.invoke('finished:produce', payload),
+    update: (payload: any) => ipcRenderer.invoke('finished:update', payload),
+    delete: (id: number) => ipcRenderer.invoke('finished:delete', id),
     history: () => ipcRenderer.invoke('finished:history'),
     sizeStats: () => ipcRenderer.invoke('finished:sizeStats')
   },

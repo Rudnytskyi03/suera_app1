@@ -2,7 +2,7 @@ import type { SaveProductInput } from './services/productsService';
 import type { SaveOrderInput } from './services/ordersService';
 import type { ClientSalesFilters } from './services/clientsService';
 import type { FinishedBatch, FinishedInventoryEntry, FinishedSizeStat } from './types';
-import type { RecordProductionInput } from './services/finishedGoodsService';
+import type { RecordProductionInput, UpdateProductionBatchInput } from './services/finishedGoodsService';
 
 declare global {
   interface Window {
@@ -23,6 +23,8 @@ declare global {
       finished: {
         list: () => Promise<FinishedInventoryEntry[]>;
         produce: (payload: RecordProductionInput) => Promise<{ success: boolean }>;
+        update: (payload: UpdateProductionBatchInput) => Promise<{ success: boolean }>;
+        delete: (id: number) => Promise<{ success: boolean }>;
         history: () => Promise<FinishedBatch[]>;
         sizeStats: () => Promise<FinishedSizeStat[]>;
       };

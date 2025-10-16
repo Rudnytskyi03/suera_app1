@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, ArchiveRestore, Layers, PlusCircle } from 'lucide-react';
+import { Activity, ArchiveRestore, Layers, Pencil, PlusCircle, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import {
+  deleteProductionBatch,
   fetchFinishedHistory,
   fetchFinishedInventory,
   fetchSizeSalesStats,
-  recordProduction
+  recordProduction,
+  updateProductionBatch
 } from '../services/finishedGoodsService';
 import { fetchProducts } from '../services/productsService';
 import { FinishedBatch, FinishedComponentType, FinishedInventoryEntry, FinishedSizeStat, Product } from '../types';
@@ -44,6 +46,18 @@ const defaultFormState: ProductionFormState = {
   }
 };
 
+function toDateTimeLocalInput(value: string | null | undefined) {
+  if (!value) {
+    return '';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+  const adjusted = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000);
+  return adjusted.toISOString().slice(0, 16);
+}
+
 const FinishedGoodsPage: React.FC = () => {
   const [inventory, setInventory] = useState<FinishedInventoryEntry[]>([]);
   const [history, setHistory] = useState<FinishedBatch[]>([]);
@@ -51,6 +65,12 @@ const FinishedGoodsPage: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [formState, setFormState] = useState<ProductionFormState>(defaultFormState);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingBatch, setEditingBatch] = useState<FinishedBatch | null>(null);
+  const [editFormState, setEditFormState] = useState<ProductionFormState>(defaultFormState);
+  const [isUpdatingBatch, setIsUpdatingBatch] = useState(false);
+  const [batchToDelete, setBatchToDelete] = useState<FinishedBatch | null>(null);
+  const [isDeletingBatch, setIsDeletingBatch] = useState(false);
   const { showToast } = useToast();
 
   const loadData = async () => {
@@ -101,6 +121,122 @@ const FinishedGoodsPage: React.FC = () => {
         [component]: Math.max(0, value)
       }
     }));
+  };
+
+  const handleEditFieldChange = <K extends keyof ProductionFormState>(
+    key: K,
+    value: ProductionFormState[K]
+  ) => {
+    setEditFormState((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleEditComponentChange = (component: FinishedComponentType, value: number) => {
+    setEditFormState((prev) => ({
+      ...prev,
+      components: {
+        ...prev.components,
+        [component]: Math.max(0, value)
+      }
+    }));
+  };
+
+  const openEditModal = (batch: FinishedBatch) => {
+    setEditingBatch(batch);
+    setEditFormState({
+      productId: batch.productId,
+      size: batch.size,
+      sets: batch.sets,
+      producedAt: toDateTimeLocalInput(batch.producedAt),
+      note: batch.note ?? '',
+      components: {
+        bra: batch.components.bra,
+        panties: batch.components.panties,
+        belt: batch.components.belt,
+        garter: batch.components.garter
+      }
+    });
+    setIsEditModalOpen(true);
+  };
+
+  const closeEditModal = (force = false) => {
+    if (!force && isUpdatingBatch) {
+      return;
+    }
+    setIsEditModalOpen(false);
+    setEditingBatch(null);
+    setEditFormState(defaultFormState);
+  };
+
+  const handleEditSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingBatch) {
+      return;
+    }
+
+    if (!editFormState.size.trim()) {
+      showToast({ title: 'Вкажіть розмір', type: 'error' });
+      return;
+    }
+
+    const components = { ...editFormState.components } as Record<FinishedComponentType, number>;
+    const totalComponents = FINISHED_COMPONENTS.reduce(
+      (sum, component) => sum + (components[component] || 0),
+      0
+    );
+
+    if (totalComponents === 0) {
+      showToast({ title: 'Вкажіть кількість хоча б для одного елементу', type: 'error' });
+      return;
+    }
+
+    setIsUpdatingBatch(true);
+    try {
+      await updateProductionBatch({
+        batchId: editingBatch.id,
+        productId: editingBatch.productId,
+        size: editFormState.size,
+        sets: editFormState.sets,
+        producedAt: editFormState.producedAt,
+        note: editFormState.note,
+        components
+      });
+      showToast({ title: 'Партію оновлено', type: 'success' });
+      closeEditModal(true);
+      await loadData();
+    } catch (error: any) {
+      showToast({ title: 'Не вдалося оновити партію', description: error.message, type: 'error' });
+    } finally {
+      setIsUpdatingBatch(false);
+    }
+  };
+
+  const handleDeleteRequest = (batch: FinishedBatch) => {
+    setBatchToDelete(batch);
+  };
+
+  const handleCancelDelete = () => {
+    if (isDeletingBatch) {
+      return;
+    }
+    setBatchToDelete(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!batchToDelete) {
+      return;
+    }
+
+    setIsDeletingBatch(true);
+    try {
+      await deleteProductionBatch(batchToDelete.id);
+      showToast({ title: 'Партію видалено', type: 'success' });
+      setBatchToDelete(null);
+      await loadData();
+    } catch (error: any) {
+      showToast({ title: 'Не вдалося видалити партію', description: error.message, type: 'error' });
+    } finally {
+      setIsDeletingBatch(false);
+    }
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -230,18 +366,34 @@ const FinishedGoodsPage: React.FC = () => {
               <h3 className="text-lg font-semibold text-slate-800">Останні партії</h3>
             </div>
             <div className="space-y-3">
-              {history.slice(0, 6).map((batch) => (
+              {history.map((batch) => (
                 <div
                   key={batch.id}
                   className="rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm"
                 >
-                  <div className="flex items-center justify-between text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-3 text-sm">
                     <div>
                       <div className="font-semibold text-slate-800">{batch.productName}</div>
                       <div className="text-xs text-slate-500">Розмір: {batch.size}</div>
                     </div>
-                    <div className="text-xs text-slate-500">
-                      {new Date(batch.producedAt).toLocaleString()}
+                    <div className="flex flex-col items-end gap-2 text-xs text-slate-500">
+                      <span>{new Date(batch.producedAt).toLocaleString()}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(batch)}
+                          className="flex items-center gap-1 rounded-lg bg-purple-50 px-3 py-1 font-semibold text-purple-600 transition hover:bg-purple-100"
+                        >
+                          <Pencil className="h-4 w-4" /> Редагувати
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRequest(batch)}
+                          className="flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-1 font-semibold text-rose-600 transition hover:bg-rose-100"
+                        >
+                          <Trash2 className="h-4 w-4" /> Видалити
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
@@ -382,6 +534,142 @@ const FinishedGoodsPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {isEditModalOpen && editingBatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-xl">
+            <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white p-8 shadow-2xl">
+              <h2 className="text-xl font-semibold text-slate-900">
+                Редагувати партію · {editingBatch.productName}
+              </h2>
+              <form className="mt-6 space-y-4" onSubmit={handleEditSubmit}>
+                <div className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Товар</span>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                    {editingBatch.productName}
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="space-y-2">
+                    <span className="text-sm font-medium text-slate-600">Розмір</span>
+                    <input
+                      value={editFormState.size}
+                      onChange={(event) =>
+                        handleEditFieldChange('size', event.target.value.toUpperCase())
+                      }
+                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-sm font-medium text-slate-600">Комплектів</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editFormState.sets}
+                      onChange={(event) =>
+                        handleEditFieldChange('sets', Math.max(0, Number(event.target.value)))
+                      }
+                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  {FINISHED_COMPONENTS.map((component) => (
+                    <label key={component} className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">{COMPONENT_LABELS[component]}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        value={editFormState.components[component] ?? 0}
+                        onChange={(event) =>
+                          handleEditComponentChange(component, Number(event.target.value))
+                        }
+                        className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Дата відшиву</span>
+                  <input
+                    type="datetime-local"
+                    value={editFormState.producedAt}
+                    onChange={(event) => handleEditFieldChange('producedAt', event.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Коментар</span>
+                  <textarea
+                    value={editFormState.note}
+                    onChange={(event) => handleEditFieldChange('note', event.target.value)}
+                    className="h-24 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    placeholder="Оновіть примітку до партії"
+                  />
+                </label>
+
+                <div className="flex justify-end gap-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeEditModal}
+                    disabled={isUpdatingBatch}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Скасувати
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingBatch}
+                    className="rounded-xl bg-gradient-to-r from-purple-500 via-indigo-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isUpdatingBatch ? 'Оновлення...' : 'Зберегти зміни'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md">
+            <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white p-8 shadow-2xl">
+              <h2 className="text-xl font-semibold text-slate-900">Видалити партію?</h2>
+              <p className="mt-3 text-sm text-slate-600">
+                Після видалення партії «{batchToDelete.productName}» розміру {batchToDelete.size} запаси
+                готових виробів буде зменшено, а використані матеріали повернуться на склад.
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Переконайтеся, що вироби з цієї партії не використані у замовленнях. Якщо їх уже продано,
+                перед видаленням скоригуйте замовлення або склад залишків.
+              </p>
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleCancelDelete}
+                  disabled={isDeletingBatch}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={isDeletingBatch}
+                  className="rounded-xl bg-gradient-to-r from-rose-500 via-pink-500 to-red-600 px-5 py-2 text-sm font-semibold text-white shadow-lg transition hover:shadow-2xl disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isDeletingBatch ? 'Видалення...' : 'Видалити партію'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

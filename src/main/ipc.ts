@@ -566,6 +566,225 @@ export function registerIpcHandlers() {
     return { success: true };
   });
 
+  ipcMain.handle('finished:update', (_event, payload) => {
+    const { batchId, size, components, sets, producedAt, note } = payload as {
+      batchId: number;
+      size?: string;
+      components?: Partial<Record<string, number>>;
+      sets?: number;
+      producedAt?: string;
+      note?: string;
+    };
+
+    if (!batchId) {
+      throw new Error('Не вдалося визначити партію для редагування');
+    }
+
+    const existing = db
+      .prepare('SELECT * FROM finished_batches WHERE id = ?')
+      .get(batchId) as FinishedBatchRecord | undefined;
+
+    if (!existing) {
+      throw new Error('Партію не знайдено');
+    }
+
+    const productId = existing.product_id;
+    const previousSize = normalizeFinishedSize(existing.size);
+    const nextSize = size ? normalizeFinishedSize(size) : previousSize;
+
+    const previousComponents: Record<FinishedComponent, number> = {
+      bra: existing.bra,
+      panties: existing.panties,
+      belt: existing.belt,
+      garter: existing.garter
+    };
+
+    const normalizedComponents: Record<FinishedComponent, number> = { ...previousComponents };
+
+    for (const component of FINISHED_COMPONENTS) {
+      const value = components?.[component];
+      if (Number.isFinite(value)) {
+        normalizedComponents[component] = Math.max(0, Math.floor(Number(value)));
+      }
+    }
+
+    const totalPieces = FINISHED_COMPONENTS.reduce(
+      (acc, component) => acc + normalizedComponents[component],
+      0
+    );
+
+    if (totalPieces === 0) {
+      throw new Error('Кількість виробів не може бути нульовою');
+    }
+
+    const previousSets = existing.sets ?? computeTotalSets(previousComponents);
+    const requestedSets = Number.isFinite(sets) ? Math.max(0, Math.floor(Number(sets))) : 0;
+    const inferredSets = computeTotalSets(normalizedComponents);
+    const nextSets = requestedSets > 0 ? requestedSets : inferredSets;
+
+    if (nextSets <= 0) {
+      throw new Error('Кількість комплектів має бути більшою за нуль');
+    }
+
+    const producedTimestamp = (() => {
+      if (producedAt && producedAt.trim().length > 0) {
+        const parsed = new Date(producedAt);
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed;
+        }
+      }
+      const fallback = new Date(existing.produced_at);
+      return Number.isNaN(fallback.getTime()) ? new Date() : fallback;
+    })();
+
+    const normalizedNote = (() => {
+      if (note === undefined) {
+        return existing.note;
+      }
+      const trimmed = note.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    })();
+
+    const materials = db
+      .prepare(
+        `SELECT pm.material_id, pm.quantity, m.quantity as available_quantity, m.name as material_name
+           FROM product_materials pm
+           JOIN materials m ON m.id = pm.material_id
+          WHERE pm.product_id = ?`
+      )
+      .all(productId) as Array<{
+        material_id: number;
+        quantity: number;
+        available_quantity: number;
+        material_name: string;
+      }>;
+
+    const setsDelta = nextSets - previousSets;
+
+    const transaction = db.transaction(() => {
+      if (setsDelta > 0) {
+        for (const material of materials) {
+          const requiredIncrease = Number(material.quantity) * setsDelta;
+          const available = Number(material.available_quantity);
+          if (requiredIncrease > 0 && available < requiredIncrease) {
+            throw new Error(
+              `Недостатньо матеріалу "${material.material_name}". Доступно ${available.toFixed(
+                2
+              )}, потрібно ${requiredIncrease.toFixed(2)}`
+            );
+          }
+        }
+      }
+
+      if (setsDelta !== 0) {
+        for (const material of materials) {
+          const delta = Number(material.quantity) * setsDelta;
+          if (delta !== 0) {
+            db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(delta, material.material_id);
+          }
+        }
+      }
+
+      for (const component of FINISHED_COMPONENTS) {
+        const previousQuantity = previousComponents[component];
+        if (previousQuantity > 0) {
+          applyFinishedInventoryDelta(db, productId, component, previousSize, -previousQuantity);
+        }
+      }
+
+      for (const component of FINISHED_COMPONENTS) {
+        const nextQuantity = normalizedComponents[component];
+        if (nextQuantity > 0) {
+          applyFinishedInventoryDelta(db, productId, component, nextSize, nextQuantity);
+        }
+      }
+
+      db.prepare(
+        `UPDATE finished_batches
+            SET size = @size,
+                sets = @sets,
+                bra = @bra,
+                panties = @panties,
+                belt = @belt,
+                garter = @garter,
+                note = @note,
+                produced_at = @producedAt
+          WHERE id = @id`
+      ).run({
+        id: existing.id,
+        size: nextSize,
+        sets: nextSets,
+        bra: normalizedComponents.bra,
+        panties: normalizedComponents.panties,
+        belt: normalizedComponents.belt,
+        garter: normalizedComponents.garter,
+        note: normalizedNote,
+        producedAt: producedTimestamp.toISOString()
+      });
+    });
+
+    transaction();
+
+    return { success: true };
+  });
+
+  ipcMain.handle('finished:delete', (_event, batchId: number) => {
+    if (!batchId) {
+      throw new Error('Не вдалося визначити партію для видалення');
+    }
+
+    const existing = db
+      .prepare('SELECT * FROM finished_batches WHERE id = ?')
+      .get(batchId) as FinishedBatchRecord | undefined;
+
+    if (!existing) {
+      throw new Error('Партію не знайдено');
+    }
+
+    const productId = existing.product_id;
+    const previousSize = normalizeFinishedSize(existing.size);
+    const previousComponents: Record<FinishedComponent, number> = {
+      bra: existing.bra,
+      panties: existing.panties,
+      belt: existing.belt,
+      garter: existing.garter
+    };
+
+    const previousSets = existing.sets ?? computeTotalSets(previousComponents);
+
+    const materials = db
+      .prepare(
+        `SELECT pm.material_id, pm.quantity
+           FROM product_materials pm
+          WHERE pm.product_id = ?`
+      )
+      .all(productId) as Array<{ material_id: number; quantity: number }>;
+
+    const transaction = db.transaction(() => {
+      if (previousSets > 0) {
+        for (const material of materials) {
+          const delta = Number(material.quantity) * previousSets;
+          if (delta !== 0) {
+            db.prepare('UPDATE materials SET quantity = quantity + ? WHERE id = ?').run(delta, material.material_id);
+          }
+        }
+      }
+
+      for (const component of FINISHED_COMPONENTS) {
+        const quantity = previousComponents[component];
+        if (quantity > 0) {
+          applyFinishedInventoryDelta(db, productId, component, previousSize, -quantity);
+        }
+      }
+
+      db.prepare('DELETE FROM finished_batches WHERE id = ?').run(existing.id);
+    });
+
+    transaction();
+
+    return { success: true };
+  });
+
   ipcMain.handle('finished:history', () => {
     const rows = db
       .prepare(
