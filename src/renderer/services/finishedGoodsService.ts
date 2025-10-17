@@ -9,6 +9,7 @@ export type RecordProductionInput = {
   producedAt?: string;
   note?: string;
   components: ProductionComponentInput;
+  skipMaterialWriteOff?: boolean;
 };
 
 export type UpdateProductionBatchInput = RecordProductionInput & {

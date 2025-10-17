@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, ArchiveRestore, Layers, Pencil, PlusCircle, Trash2 } from 'lucide-react';
-import clsx from 'clsx';
 import {
   deleteProductionBatch,
   fetchFinishedHistory,
@@ -43,6 +42,7 @@ type ProductionFormState = {
   producedAt: string;
   note: string;
   components: Record<FinishedComponentType, number>;
+  skipMaterialWriteOff: boolean;
 };
 
 const defaultFormState: ProductionFormState = {
@@ -56,7 +56,8 @@ const defaultFormState: ProductionFormState = {
     panties: 0,
     belt: 0,
     garter: 0
-  }
+  },
+  skipMaterialWriteOff: false
 };
 
 function toDateTimeLocalInput(value: string | null | undefined) {
@@ -233,7 +234,8 @@ const FinishedGoodsPage: React.FC = () => {
         panties: batch.components.panties,
         belt: batch.components.belt,
         garter: batch.components.garter
-      }
+      },
+      skipMaterialWriteOff: batch.skipMaterials
     });
     setIsEditModalOpen(true);
   };
@@ -346,7 +348,8 @@ const FinishedGoodsPage: React.FC = () => {
         sets: formState.sets,
         producedAt: formState.producedAt,
         note: formState.note,
-        components
+        components,
+        skipMaterialWriteOff: formState.skipMaterialWriteOff
       });
       showToast({ title: 'Прихід готових виробів додано', type: 'success' });
       setFormState((prev) => ({
@@ -400,7 +403,6 @@ const FinishedGoodsPage: React.FC = () => {
                     <th className="px-4 py-3 text-left">Товар</th>
                     <th className="px-4 py-3 text-left">Розміри бра</th>
                     <th className="px-4 py-3 text-left">Розміри трусиків</th>
-                    <th className="px-4 py-3 text-left">Компоненти</th>
                     <th className="px-4 py-3 text-right">Комплектів</th>
                   </tr>
                 </thead>
@@ -440,29 +442,12 @@ const FinishedGoodsPage: React.FC = () => {
                           <span className="text-slate-400">Немає даних</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-600">
-                        <div className="flex flex-wrap gap-2">
-                          {FINISHED_COMPONENTS.map((component) => (
-                            <span
-                              key={component}
-                              className={clsx(
-                                'rounded-full px-3 py-1 text-xs font-semibold',
-                                entry.totalsByComponent[component] > 0
-                                  ? 'bg-purple-100 text-purple-700'
-                                  : 'bg-slate-100 text-slate-500'
-                              )}
-                            >
-                              {COMPONENT_LABELS[component]}: {entry.totalsByComponent[component]}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
                       <td className="px-4 py-3 text-right font-semibold text-slate-800">{entry.totalSets}</td>
                     </tr>
                   ))}
                   {groupedInventory.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">
+                      <td colSpan={4} className="px-4 py-6 text-center text-sm text-slate-500">
                         Немає готових виробів на складі.
                       </td>
                     </tr>
@@ -487,6 +472,11 @@ const FinishedGoodsPage: React.FC = () => {
                     <div>
                       <div className="font-semibold text-slate-800">{batch.productName}</div>
                       <div className="text-xs text-slate-500">Розмір: {batch.size}</div>
+                      {batch.skipMaterials && (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                          Матеріали не списані
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-col items-end gap-2 text-xs text-slate-500">
                       <span>{new Date(batch.producedAt).toLocaleString()}</span>
@@ -588,6 +578,20 @@ const FinishedGoodsPage: React.FC = () => {
               ))}
             </div>
 
+            <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={formState.skipMaterialWriteOff}
+                onChange={(event) => handleFormChange('skipMaterialWriteOff', event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-purple-600 focus:ring-purple-400"
+              />
+              <span>
+                <span className="font-semibold text-slate-700">Не списувати матеріали зі складу</span>
+                <br />
+                Залишайте прапорець увімкненим, якщо виробничі матеріали вже обліковані вручну або не потребують списання.
+              </span>
+            </label>
+
             <label className="space-y-2">
               <span className="text-sm font-medium text-slate-600">Дата відшиву</span>
               <input
@@ -654,6 +658,11 @@ const FinishedGoodsPage: React.FC = () => {
               <h2 className="text-xl font-semibold text-slate-900">
                 Редагувати партію · {editingBatch.productName}
               </h2>
+              {editingBatch.skipMaterials && (
+                <div className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                  Матеріали для цієї партії не були списані зі складу під час відшиву.
+                </div>
+              )}
               <form className="mt-6 space-y-4" onSubmit={handleEditSubmit}>
                 <div className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Товар</span>

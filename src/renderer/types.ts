@@ -7,6 +7,8 @@ export type Material = {
   pricePerUnit: number;
   photoUrl?: string;
   photoPath?: string | null;
+  braUnderwireSize: string | null;
+  underwireUnitsPerBra: number | null;
 };
 
 export type MaterialReceiptInput = {
@@ -146,6 +148,7 @@ export type FinishedBatch = {
   components: Record<FinishedComponentType, number>;
   note?: string | null;
   producedAt: string;
+  skipMaterials: boolean;
 };
 
 export type FinishedSizeStat = {

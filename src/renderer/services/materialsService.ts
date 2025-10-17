@@ -8,6 +8,8 @@ export type MaterialSaveInput = {
   pricePerUnit: number;
   newPhoto?: { originalName: string; filePath: string };
   removePhoto?: boolean;
+  braUnderwireSize?: string | null;
+  underwireUnitsPerBra?: number | null;
 };
 
 export async function fetchMaterials(): Promise<Material[]> {

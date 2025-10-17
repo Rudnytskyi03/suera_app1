@@ -25,6 +25,8 @@ type MaterialFormState = {
   unit: Material['unit'];
   quantity: string;
   pricePerUnit: string;
+  braUnderwireSize: string;
+  underwireUnitsPerBra: string;
 };
 
 const defaultForm: MaterialFormState = {
@@ -32,7 +34,9 @@ const defaultForm: MaterialFormState = {
   category: 'Модал',
   unit: 'meters',
   quantity: '',
-  pricePerUnit: ''
+  pricePerUnit: '',
+  braUnderwireSize: '',
+  underwireUnitsPerBra: ''
 };
 
 type PendingPhoto = {
@@ -94,7 +98,9 @@ const MaterialsPage: React.FC = () => {
         category: material.category,
         unit: material.unit,
         quantity: material.quantity.toString(),
-        pricePerUnit: material.pricePerUnit.toString()
+        pricePerUnit: material.pricePerUnit.toString(),
+        braUnderwireSize: material.braUnderwireSize ?? '',
+        underwireUnitsPerBra: material.underwireUnitsPerBra?.toString() ?? ''
       });
       setExistingPhoto(
         material.photoUrl
@@ -154,12 +160,25 @@ const MaterialsPage: React.FC = () => {
         throw new Error('Будь ласка, введіть коректну ціну.');
       }
 
+      const normalizedUnderwireSize = formState.braUnderwireSize.trim().toUpperCase();
+      const hasUnderwire = normalizedUnderwireSize.length > 0;
+      const underwireUnitsValue = String(formState.underwireUnitsPerBra).replace(',', '.');
+      const parsedUnderwireUnits = Number(underwireUnitsValue);
+
+      if (hasUnderwire) {
+        if (!Number.isFinite(parsedUnderwireUnits) || parsedUnderwireUnits <= 0) {
+          throw new Error('Вкажіть кількість косточок на один бра.');
+        }
+      }
+
       const payload: MaterialSaveInput = {
         name: formState.name,
         category: formState.category,
         unit: formState.unit,
         quantity,
-        pricePerUnit
+        pricePerUnit,
+        braUnderwireSize: hasUnderwire ? normalizedUnderwireSize : null,
+        underwireUnitsPerBra: hasUnderwire ? parsedUnderwireUnits : null
       };
 
       if (pendingPhoto) {
@@ -340,7 +359,17 @@ const MaterialsPage: React.FC = () => {
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 font-medium text-slate-800">{material.name}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-slate-800">{material.name}</div>
+                    {material.braUnderwireSize && (
+                      <div className="mt-1 text-xs font-semibold text-purple-600">
+                        Косточки {material.braUnderwireSize}
+                        {material.underwireUnitsPerBra !== null
+                          ? ` · ${material.underwireUnitsPerBra} / бра`
+                          : ''}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-slate-500">{material.category}</td>
                   <td className="px-4 py-3 text-slate-500">{units.find((u) => u.value === material.unit)?.label}</td>
                   <td className="px-4 py-3 text-slate-500">{material.quantity}</td>
@@ -526,6 +555,41 @@ const MaterialsPage: React.FC = () => {
                   />
                 </label>
               </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Розмір бра для косточок</span>
+                  <input
+                    value={formState.braUnderwireSize}
+                    onChange={(event) => {
+                      const nextValue = event.target.value.toUpperCase();
+                      setFormState({
+                        ...formState,
+                        braUnderwireSize: nextValue,
+                        underwireUnitsPerBra: nextValue.trim() ? formState.underwireUnitsPerBra : ''
+                      });
+                    }}
+                    placeholder="Наприклад: 75B"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-600">Косточки на 1 бра</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={formState.underwireUnitsPerBra}
+                    onChange={(event) =>
+                      setFormState({ ...formState, underwireUnitsPerBra: event.target.value })
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200 disabled:opacity-50"
+                    disabled={!formState.braUnderwireSize.trim()}
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-slate-400">
+                Якщо залишити ці поля порожніми, матеріал не буде використовуватись як косточки для бра.
+              </p>
               <div className="space-y-2">
                 <span className="text-sm font-medium text-slate-600">Фото матеріалу</span>
                 <div className="flex flex-wrap gap-3">

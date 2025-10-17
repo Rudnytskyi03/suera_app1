@@ -84,6 +84,63 @@ function normalizeFinishedSize(size: string) {
   return trimmed.length > 0 ? trimmed.toUpperCase() : 'UNSIZED';
 }
 
+function normalizeUnderwireSizeInput(size: string | null | undefined) {
+  if (typeof size !== 'string') {
+    return null;
+  }
+  const trimmed = size.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.toUpperCase();
+}
+
+type UnderwireUsage = {
+  materialId: number;
+  available: number;
+  required: number;
+  size: string;
+  unitsPerBra: number;
+};
+
+function computeUnderwireUsage(
+  db: ReturnType<typeof getDatabase>,
+  size: string,
+  braCount: number
+): UnderwireUsage | null {
+  if (braCount <= 0) {
+    return null;
+  }
+  const normalizedSize = normalizeFinishedSize(size);
+  if (normalizedSize === 'UNSIZED') {
+    throw new Error('Для бра потрібно вказати розмір, щоб списати косточки зі складу.');
+  }
+  const row = db
+    .prepare(
+      'SELECT id, quantity, underwire_units_per_bra FROM materials WHERE bra_underwire_size = ?'
+    )
+    .get(normalizedSize) as { id: number; quantity: number; underwire_units_per_bra: number } | undefined;
+
+  if (!row) {
+    throw new Error(`Не налаштовано косточки для розміру ${normalizedSize}. Додайте матеріал у довіднику.`);
+  }
+
+  const unitsPerBra = Number(row.underwire_units_per_bra ?? 0);
+  if (!Number.isFinite(unitsPerBra) || unitsPerBra <= 0) {
+    throw new Error(`Вкажіть кількість косточок на один бра для розміру ${normalizedSize}.`);
+  }
+
+  const available = Number(row.quantity) || 0;
+  const required = unitsPerBra * braCount;
+  return {
+    materialId: row.id,
+    available,
+    required,
+    size: normalizedSize,
+    unitsPerBra
+  };
+}
+
 function ensureFinishedComponent(component: string): FinishedComponent {
   if (FINISHED_COMPONENTS.includes(component as FinishedComponent)) {
     return component as FinishedComponent;
@@ -197,6 +254,11 @@ function mapMaterialRecord(record: MaterialRecord) {
   const fileUrl = absolutePhoto && fs.existsSync(absolutePhoto) ? pathToFileURL(absolutePhoto).toString() : undefined;
   const remoteUrl = !fileUrl && record.photo && /^https?:\/\//i.test(record.photo) ? record.photo : undefined;
   const photoUrl = fileUrl ?? remoteUrl;
+  const normalizedUnderwireSize =
+    typeof record.bra_underwire_size === 'string' && record.bra_underwire_size.trim().length > 0
+      ? record.bra_underwire_size.trim().toUpperCase()
+      : null;
+  const underwireUnits = normalizedUnderwireSize ? Number(record.underwire_units_per_bra ?? 0) : null;
 
   return {
     id: record.id,
@@ -206,7 +268,9 @@ function mapMaterialRecord(record: MaterialRecord) {
     quantity: record.quantity,
     pricePerUnit: record.price_per_unit,
     photoUrl,
-    photoPath: record.photo ?? null
+    photoPath: record.photo ?? null,
+    braUnderwireSize: normalizedUnderwireSize,
+    underwireUnitsPerBra: underwireUnits
   };
 }
 
@@ -292,13 +356,15 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('materials:create', (_event, payload) => {
-    const { newPhoto, ...rest } = payload as {
+    const { newPhoto, braUnderwireSize, underwireUnitsPerBra, ...rest } = payload as {
       name: string;
       category: string;
       unit: 'meters' | 'pieces';
       quantity: number;
       pricePerUnit: number;
       newPhoto?: { originalName: string; filePath: string };
+      braUnderwireSize?: string | null;
+      underwireUnitsPerBra?: number | null;
     };
 
     let photoPath: string | null = null;
@@ -306,10 +372,25 @@ export function registerIpcHandlers() {
       photoPath = persistPhotoFromPayload(newPhoto, 'material');
     }
 
+    const normalizedUnderwireSize = normalizeUnderwireSizeInput(braUnderwireSize);
+    let normalizedUnderwireUnits = 0;
+    if (normalizedUnderwireSize) {
+      const parsedUnits = Number(underwireUnitsPerBra);
+      if (!Number.isFinite(parsedUnits) || parsedUnits <= 0) {
+        throw new Error('Кількість косточок на один бра повинна бути більшою за нуль.');
+      }
+      normalizedUnderwireUnits = parsedUnits;
+    }
+
     const insert = db.prepare(
-      'INSERT INTO materials (name, category, unit, quantity, price_per_unit, photo) VALUES (@name, @category, @unit, @quantity, @pricePerUnit, @photo)'
+      'INSERT INTO materials (name, category, unit, quantity, price_per_unit, photo, bra_underwire_size, underwire_units_per_bra) VALUES (@name, @category, @unit, @quantity, @pricePerUnit, @photo, @braUnderwireSize, @underwireUnitsPerBra)'
     );
-    const result = insert.run({ ...rest, photo: photoPath });
+    const result = insert.run({
+      ...rest,
+      photo: photoPath,
+      braUnderwireSize: normalizedUnderwireSize,
+      underwireUnitsPerBra: normalizedUnderwireUnits
+    });
     const created = db.prepare('SELECT * FROM materials WHERE id = ?').get(result.lastInsertRowid) as MaterialRecord;
     return mapMaterialRecord(created);
   });
@@ -320,7 +401,7 @@ export function registerIpcHandlers() {
       throw new Error('Матеріал не знайдено');
     }
 
-    const { newPhoto, removePhoto, ...rest } = payload as {
+    const { newPhoto, removePhoto, braUnderwireSize, underwireUnitsPerBra, ...rest } = payload as {
       name: string;
       category: string;
       unit: 'meters' | 'pieces';
@@ -328,6 +409,8 @@ export function registerIpcHandlers() {
       pricePerUnit: number;
       newPhoto?: { originalName: string; filePath: string };
       removePhoto?: boolean;
+      braUnderwireSize?: string | null;
+      underwireUnitsPerBra?: number | null;
     };
 
     let photoPath: string | null = material.photo ?? null;
@@ -344,10 +427,26 @@ export function registerIpcHandlers() {
       photoPath = persistPhotoFromPayload(newPhoto, 'material');
     }
 
+    const normalizedUnderwireSize = normalizeUnderwireSizeInput(braUnderwireSize);
+    let normalizedUnderwireUnits = 0;
+    if (normalizedUnderwireSize) {
+      const parsedUnits = Number(underwireUnitsPerBra);
+      if (!Number.isFinite(parsedUnits) || parsedUnits <= 0) {
+        throw new Error('Кількість косточок на один бра повинна бути більшою за нуль.');
+      }
+      normalizedUnderwireUnits = parsedUnits;
+    }
+
     const update = db.prepare(
-      'UPDATE materials SET name=@name, category=@category, unit=@unit, quantity=@quantity, price_per_unit=@pricePerUnit, photo=@photo WHERE id=@id'
+      'UPDATE materials SET name=@name, category=@category, unit=@unit, quantity=@quantity, price_per_unit=@pricePerUnit, photo=@photo, bra_underwire_size=@braUnderwireSize, underwire_units_per_bra=@underwireUnitsPerBra WHERE id=@id'
     );
-    update.run({ ...rest, photo: photoPath, id });
+    update.run({
+      ...rest,
+      photo: photoPath,
+      id,
+      braUnderwireSize: normalizedUnderwireSize,
+      underwireUnitsPerBra: normalizedUnderwireUnits
+    });
     const updated = db.prepare('SELECT * FROM materials WHERE id = ?').get(id) as MaterialRecord;
     return mapMaterialRecord(updated);
   });
@@ -454,13 +553,14 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('finished:produce', (_event, payload) => {
-    const { productId, size, components, sets, producedAt, note } = payload as {
+    const { productId, size, components, sets, producedAt, note, skipMaterialWriteOff } = payload as {
       productId: number;
       size: string;
       components?: Partial<Record<string, number>>;
       sets?: number;
       producedAt?: string;
       note?: string;
+      skipMaterialWriteOff?: boolean;
     };
 
     if (!productId) {
@@ -506,41 +606,63 @@ export function registerIpcHandlers() {
       return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
     })();
 
-    const transaction = db.transaction(() => {
-      const materials = db
-        .prepare(
-          `SELECT pm.material_id, pm.quantity, m.quantity as available_quantity, m.name as material_name
-             FROM product_materials pm
-             JOIN materials m ON m.id = pm.material_id
-            WHERE pm.product_id = ?`
-        )
-        .all(productId) as Array<{
-          material_id: number;
-          quantity: number;
-          available_quantity: number;
-          material_name: string;
-        }>;
+    const skipMaterials = Boolean(skipMaterialWriteOff);
 
-      for (const material of materials) {
-        const required = Number(material.quantity) * setsToProduce;
-        const available = Number(material.available_quantity);
-        if (required > 0 && available < required) {
+    const transaction = db.transaction(() => {
+      const underwireUsage =
+        !skipMaterials && normalizedComponents.bra > 0
+          ? computeUnderwireUsage(db, normalizedSize, normalizedComponents.bra)
+          : null;
+
+      if (!skipMaterials) {
+        const materials = db
+          .prepare(
+            `SELECT pm.material_id, pm.quantity, m.quantity as available_quantity, m.name as material_name
+               FROM product_materials pm
+               JOIN materials m ON m.id = pm.material_id
+              WHERE pm.product_id = ?`
+          )
+          .all(productId) as Array<{
+            material_id: number;
+            quantity: number;
+            available_quantity: number;
+            material_name: string;
+          }>;
+
+        for (const material of materials) {
+          const required = Number(material.quantity) * setsToProduce;
+          const available = Number(material.available_quantity);
+          if (required > 0 && available < required) {
+            throw new Error(
+              `Недостатньо матеріалу "${material.material_name}". Доступно ${available.toFixed(2)}, потрібно ${required.toFixed(2)}`
+            );
+          }
+        }
+
+        if (underwireUsage && underwireUsage.required > 0 && underwireUsage.available < underwireUsage.required) {
           throw new Error(
-            `Недостатньо матеріалу "${material.material_name}". Доступно ${available.toFixed(2)}, потрібно ${required.toFixed(2)}`
+            `Недостатньо косточок для розміру ${underwireUsage.size}. Доступно ${underwireUsage.available.toFixed(2)}, потрібно ${underwireUsage.required.toFixed(2)}`
+          );
+        }
+
+        for (const material of materials) {
+          const required = Number(material.quantity) * setsToProduce;
+          if (required > 0) {
+            db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(required, material.material_id);
+          }
+        }
+
+        if (underwireUsage && underwireUsage.required > 0) {
+          db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(
+            underwireUsage.required,
+            underwireUsage.materialId
           );
         }
       }
 
-      for (const material of materials) {
-        const required = Number(material.quantity) * setsToProduce;
-        if (required > 0) {
-          db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(required, material.material_id);
-        }
-      }
-
       db.prepare(
-        `INSERT INTO finished_batches (product_id, size, sets, bra, panties, belt, garter, note, produced_at)
-         VALUES (@productId, @size, @sets, @bra, @panties, @belt, @garter, @note, @producedAt)`
+        `INSERT INTO finished_batches (product_id, size, sets, bra, panties, belt, garter, note, produced_at, skip_materials)
+         VALUES (@productId, @size, @sets, @bra, @panties, @belt, @garter, @note, @producedAt, @skipMaterials)`
       ).run({
         productId,
         size: normalizedSize,
@@ -550,7 +672,8 @@ export function registerIpcHandlers() {
         belt: normalizedComponents.belt,
         garter: normalizedComponents.garter,
         note: note?.trim() || null,
-        producedAt: producedTimestamp.toISOString()
+        producedAt: producedTimestamp.toISOString(),
+        skipMaterials: skipMaterials ? 1 : 0
       });
 
       for (const component of FINISHED_COMPONENTS) {
@@ -645,43 +768,83 @@ export function registerIpcHandlers() {
       return trimmed.length > 0 ? trimmed : null;
     })();
 
-    const materials = db
-      .prepare(
-        `SELECT pm.material_id, pm.quantity, m.quantity as available_quantity, m.name as material_name
-           FROM product_materials pm
-           JOIN materials m ON m.id = pm.material_id
-          WHERE pm.product_id = ?`
-      )
-      .all(productId) as Array<{
-        material_id: number;
-        quantity: number;
-        available_quantity: number;
-        material_name: string;
-      }>;
-
     const setsDelta = nextSets - previousSets;
+    const skipMaterials = existing.skip_materials === 1;
 
     const transaction = db.transaction(() => {
-      if (setsDelta > 0) {
-        for (const material of materials) {
-          const requiredIncrease = Number(material.quantity) * setsDelta;
-          const available = Number(material.available_quantity);
-          if (requiredIncrease > 0 && available < requiredIncrease) {
+      let previousUnderwireUsage: UnderwireUsage | null = null;
+      let nextUnderwireUsage: UnderwireUsage | null = null;
+
+      if (!skipMaterials) {
+        const materials = db
+          .prepare(
+            `SELECT pm.material_id, pm.quantity, m.quantity as available_quantity, m.name as material_name
+               FROM product_materials pm
+               JOIN materials m ON m.id = pm.material_id
+              WHERE pm.product_id = ?`
+          )
+          .all(productId) as Array<{
+            material_id: number;
+            quantity: number;
+            available_quantity: number;
+            material_name: string;
+          }>;
+
+        if (setsDelta > 0) {
+          for (const material of materials) {
+            const requiredIncrease = Number(material.quantity) * setsDelta;
+            const available = Number(material.available_quantity);
+            if (requiredIncrease > 0 && available < requiredIncrease) {
+              throw new Error(
+                `Недостатньо матеріалу "${material.material_name}". Доступно ${available.toFixed(
+                  2
+                )}, потрібно ${requiredIncrease.toFixed(2)}`
+              );
+            }
+          }
+        }
+
+        if (previousComponents.bra > 0) {
+          previousUnderwireUsage = computeUnderwireUsage(db, previousSize, previousComponents.bra);
+        }
+
+        if (normalizedComponents.bra > 0) {
+          nextUnderwireUsage = computeUnderwireUsage(db, nextSize, normalizedComponents.bra);
+        }
+
+        if (nextUnderwireUsage) {
+          let available = nextUnderwireUsage.available;
+          if (previousUnderwireUsage && previousUnderwireUsage.materialId === nextUnderwireUsage.materialId) {
+            available += previousUnderwireUsage.required;
+          }
+          if (available < nextUnderwireUsage.required) {
             throw new Error(
-              `Недостатньо матеріалу "${material.material_name}". Доступно ${available.toFixed(
-                2
-              )}, потрібно ${requiredIncrease.toFixed(2)}`
+              `Недостатньо косточок для розміру ${nextUnderwireUsage.size}. Доступно ${available.toFixed(2)}, потрібно ${nextUnderwireUsage.required.toFixed(2)}`
             );
           }
         }
-      }
 
-      if (setsDelta !== 0) {
-        for (const material of materials) {
-          const delta = Number(material.quantity) * setsDelta;
-          if (delta !== 0) {
-            db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(delta, material.material_id);
+        if (setsDelta !== 0) {
+          for (const material of materials) {
+            const delta = Number(material.quantity) * setsDelta;
+            if (delta !== 0) {
+              db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(delta, material.material_id);
+            }
           }
+        }
+
+        if (previousUnderwireUsage && previousUnderwireUsage.required > 0) {
+          db.prepare('UPDATE materials SET quantity = quantity + ? WHERE id = ?').run(
+            previousUnderwireUsage.required,
+            previousUnderwireUsage.materialId
+          );
+        }
+
+        if (nextUnderwireUsage && nextUnderwireUsage.required > 0) {
+          db.prepare('UPDATE materials SET quantity = quantity - ? WHERE id = ?').run(
+            nextUnderwireUsage.required,
+            nextUnderwireUsage.materialId
+          );
         }
       }
 
@@ -751,23 +914,38 @@ export function registerIpcHandlers() {
     };
 
     const previousSets = existing.sets ?? computeTotalSets(previousComponents);
+    const skipMaterials = existing.skip_materials === 1;
 
-    const materials = db
-      .prepare(
-        `SELECT pm.material_id, pm.quantity
-           FROM product_materials pm
-          WHERE pm.product_id = ?`
-      )
-      .all(productId) as Array<{ material_id: number; quantity: number }>;
+    const previousUnderwireUsage =
+      !skipMaterials && previousComponents.bra > 0
+        ? computeUnderwireUsage(db, previousSize, previousComponents.bra)
+        : null;
+
+    const materials = !skipMaterials
+      ? (db
+          .prepare(
+            `SELECT pm.material_id, pm.quantity
+               FROM product_materials pm
+              WHERE pm.product_id = ?`
+          )
+          .all(productId) as Array<{ material_id: number; quantity: number }>)
+      : [];
 
     const transaction = db.transaction(() => {
-      if (previousSets > 0) {
+      if (!skipMaterials && previousSets > 0) {
         for (const material of materials) {
           const delta = Number(material.quantity) * previousSets;
           if (delta !== 0) {
             db.prepare('UPDATE materials SET quantity = quantity + ? WHERE id = ?').run(delta, material.material_id);
           }
         }
+      }
+
+      if (previousUnderwireUsage && previousUnderwireUsage.required > 0) {
+        db.prepare('UPDATE materials SET quantity = quantity + ? WHERE id = ?').run(
+          previousUnderwireUsage.required,
+          previousUnderwireUsage.materialId
+        );
       }
 
       for (const component of FINISHED_COMPONENTS) {
@@ -809,7 +987,8 @@ export function registerIpcHandlers() {
         garter: row.garter
       },
       note: row.note,
-      producedAt: row.produced_at
+      producedAt: row.produced_at,
+      skipMaterials: row.skip_materials === 1
     }));
   });
 

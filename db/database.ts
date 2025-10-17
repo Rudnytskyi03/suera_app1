@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS materials (
   unit TEXT NOT NULL,
   quantity REAL NOT NULL DEFAULT 0,
   price_per_unit REAL NOT NULL DEFAULT 0,
-  photo TEXT
+  photo TEXT,
+  bra_underwire_size TEXT,
+  underwire_units_per_bra REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS material_receipts (
@@ -147,7 +149,8 @@ CREATE TABLE IF NOT EXISTS finished_batches (
   belt INTEGER NOT NULL DEFAULT 0,
   garter INTEGER NOT NULL DEFAULT 0,
   note TEXT,
-  produced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  produced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  skip_materials INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS order_finished_allocations (
@@ -171,6 +174,9 @@ CREATE TABLE IF NOT EXISTS order_finished_allocations (
   ensureColumn(db, 'orders', 'discount_percent', 'discount_percent REAL NOT NULL DEFAULT 0');
   ensureOrderExpensesTable(db);
   ensureFinishedTables(db);
+  ensureColumn(db, 'materials', 'bra_underwire_size', 'bra_underwire_size TEXT');
+  ensureColumn(db, 'materials', 'underwire_units_per_bra', 'underwire_units_per_bra REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'finished_batches', 'skip_materials', 'skip_materials INTEGER NOT NULL DEFAULT 0');
   backfillClientsFromOrders(db);
 
   const defaultUserStmt = db.prepare('SELECT * FROM users WHERE email = ?');
@@ -423,6 +429,8 @@ export type MaterialRecord = {
   quantity: number;
   price_per_unit: number;
   photo?: string | null;
+  bra_underwire_size?: string | null;
+  underwire_units_per_bra?: number;
 };
 
 export type ProductRecord = {
@@ -487,6 +495,7 @@ export type FinishedBatchRecord = {
   garter: number;
   note: string | null;
   produced_at: string;
+  skip_materials: number;
 };
 
 export type OrderFinishedAllocationRecord = {
