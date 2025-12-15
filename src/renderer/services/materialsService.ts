@@ -8,7 +8,7 @@ export type MaterialSaveInput = {
   pricePerUnit: number;
   newPhoto?: { originalName: string; filePath: string };
   removePhoto?: boolean;
-  braUnderwireSize?: string | null;
+  underwireSizes?: string[];
   underwireUnitsPerBra?: number | null;
 };
 

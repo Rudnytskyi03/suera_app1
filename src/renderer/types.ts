@@ -7,7 +7,7 @@ export type Material = {
   pricePerUnit: number;
   photoUrl?: string;
   photoPath?: string | null;
-  braUnderwireSize: string | null;
+  braUnderwireSizes: string[];
   underwireUnitsPerBra: number | null;
 };
 

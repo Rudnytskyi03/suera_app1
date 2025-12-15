@@ -25,7 +25,7 @@ type MaterialFormState = {
   unit: Material['unit'];
   quantity: string;
   pricePerUnit: string;
-  braUnderwireSize: string;
+  braUnderwireSizes: string;
   underwireUnitsPerBra: string;
 };
 
@@ -35,7 +35,7 @@ const defaultForm: MaterialFormState = {
   unit: 'meters',
   quantity: '',
   pricePerUnit: '',
-  braUnderwireSize: '',
+  braUnderwireSizes: '',
   underwireUnitsPerBra: ''
 };
 
@@ -99,7 +99,7 @@ const MaterialsPage: React.FC = () => {
         unit: material.unit,
         quantity: material.quantity.toString(),
         pricePerUnit: material.pricePerUnit.toString(),
-        braUnderwireSize: material.braUnderwireSize ?? '',
+        braUnderwireSizes: material.braUnderwireSizes.join(', '),
         underwireUnitsPerBra: material.underwireUnitsPerBra?.toString() ?? ''
       });
       setExistingPhoto(
@@ -160,8 +160,15 @@ const MaterialsPage: React.FC = () => {
         throw new Error('Будь ласка, введіть коректну ціну.');
       }
 
-      const normalizedUnderwireSize = formState.braUnderwireSize.trim().toUpperCase();
-      const hasUnderwire = normalizedUnderwireSize.length > 0;
+      const underwireSizes = Array.from(
+        new Set(
+          formState.braUnderwireSizes
+            .split(/[,;]/)
+            .map((value) => value.trim().toUpperCase())
+            .filter((value) => value.length > 0 && value !== 'UNSIZED')
+        )
+      );
+      const hasUnderwire = underwireSizes.length > 0;
       const underwireUnitsValue = String(formState.underwireUnitsPerBra).replace(',', '.');
       const parsedUnderwireUnits = Number(underwireUnitsValue);
 
@@ -177,7 +184,7 @@ const MaterialsPage: React.FC = () => {
         unit: formState.unit,
         quantity,
         pricePerUnit,
-        braUnderwireSize: hasUnderwire ? normalizedUnderwireSize : null,
+        underwireSizes: hasUnderwire ? underwireSizes : [],
         underwireUnitsPerBra: hasUnderwire ? parsedUnderwireUnits : null
       };
 
@@ -361,9 +368,9 @@ const MaterialsPage: React.FC = () => {
                   </td>
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-800">{material.name}</div>
-                    {material.braUnderwireSize && (
+                    {material.braUnderwireSizes.length > 0 && (
                       <div className="mt-1 text-xs font-semibold text-purple-600">
-                        Косточки {material.braUnderwireSize}
+                        Косточки {material.braUnderwireSizes.join(', ')}
                         {material.underwireUnitsPerBra !== null
                           ? ` · ${material.underwireUnitsPerBra} / бра`
                           : ''}
@@ -557,18 +564,18 @@ const MaterialsPage: React.FC = () => {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-600">Розмір бра для косточок</span>
+                  <span className="text-sm font-medium text-slate-600">Розміри бра для косточок</span>
                   <input
-                    value={formState.braUnderwireSize}
+                    value={formState.braUnderwireSizes}
                     onChange={(event) => {
                       const nextValue = event.target.value.toUpperCase();
                       setFormState({
                         ...formState,
-                        braUnderwireSize: nextValue,
+                        braUnderwireSizes: nextValue,
                         underwireUnitsPerBra: nextValue.trim() ? formState.underwireUnitsPerBra : ''
                       });
                     }}
-                    placeholder="Наприклад: 75B"
+                    placeholder="Наприклад: 75B, 80A, 70C"
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
                   />
                 </label>
@@ -583,7 +590,7 @@ const MaterialsPage: React.FC = () => {
                       setFormState({ ...formState, underwireUnitsPerBra: event.target.value })
                     }
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200 disabled:opacity-50"
-                    disabled={!formState.braUnderwireSize.trim()}
+                    disabled={!formState.braUnderwireSizes.trim()}
                   />
                 </label>
               </div>

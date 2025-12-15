@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS materials (
   underwire_units_per_bra REAL NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS material_underwire_sizes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  size TEXT NOT NULL,
+  UNIQUE(material_id, size)
+);
+
 CREATE TABLE IF NOT EXISTS material_receipts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
@@ -176,6 +183,7 @@ CREATE TABLE IF NOT EXISTS order_finished_allocations (
   ensureFinishedTables(db);
   ensureColumn(db, 'materials', 'bra_underwire_size', 'bra_underwire_size TEXT');
   ensureColumn(db, 'materials', 'underwire_units_per_bra', 'underwire_units_per_bra REAL NOT NULL DEFAULT 0');
+  ensureMaterialUnderwireSizesTable(db);
   ensureColumn(db, 'finished_batches', 'skip_materials', 'skip_materials INTEGER NOT NULL DEFAULT 0');
   backfillClientsFromOrders(db);
 
@@ -238,6 +246,51 @@ function ensureProductExpensesTable(db: Database.Database) {
       );
     `);
   }
+}
+
+function ensureMaterialUnderwireSizesTable(db: Database.Database) {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='material_underwire_sizes'")
+    .all() as Array<{ name: string }>;
+  if (tables.length === 0) {
+    db.exec(`
+      CREATE TABLE material_underwire_sizes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+        size TEXT NOT NULL,
+        UNIQUE(material_id, size)
+      );
+    `);
+  }
+
+  const hasSizeColumn = db
+    .prepare("PRAGMA table_info(material_underwire_sizes)")
+    .all() as Array<{ name: string }>;
+  if (!hasSizeColumn.some((column) => column.name === 'size')) {
+    db.exec('ALTER TABLE material_underwire_sizes ADD COLUMN size TEXT NOT NULL DEFAULT ""');
+  }
+
+  const materialsWithSingleSize = db
+    .prepare('SELECT id, bra_underwire_size FROM materials WHERE bra_underwire_size IS NOT NULL')
+    .all() as Array<{ id: number; bra_underwire_size: string }>;
+
+  const insertSize = db.prepare(
+    'INSERT OR IGNORE INTO material_underwire_sizes (material_id, size) VALUES (@materialId, @size)'
+  );
+
+  const migrate = db.transaction(() => {
+    for (const material of materialsWithSingleSize) {
+      const normalized = (material.bra_underwire_size || '')
+        .split(',')
+        .map((size) => size.trim().toUpperCase())
+        .filter((size) => size.length > 0 && size !== 'UNSIZED');
+      for (const size of normalized) {
+        insertSize.run({ materialId: material.id, size });
+      }
+    }
+  });
+
+  migrate();
 }
 
 function ensureOrderExpensesTable(db: Database.Database) {

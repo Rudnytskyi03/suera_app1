@@ -43,13 +43,6 @@ type ComponentAllocation = {
   quantity: number;
 };
 
-const createAllocationTemplate = (quantity: number): Record<FinishedComponentType, ComponentAllocation[]> => ({
-  bra: [{ size: '', quantity }],
-  panties: [{ size: '', quantity }],
-  belt: [{ size: '', quantity }],
-  garter: [{ size: '', quantity }]
-});
-
 const rebalanceAllocations = (
   allocations: ComponentAllocation[],
   targetQuantity: number,
@@ -283,6 +276,53 @@ const OrdersPage: React.FC = () => {
     return map;
   }, [finishedInventory]);
 
+  const getComponentAvailability = (productId: number, component: FinishedComponentType) => {
+    const availability = inventoryByProduct.get(productId)?.[component] ?? {};
+    return Object.values(availability).reduce((acc, value) => acc + value, 0);
+  };
+
+  const createAllocationsForProduct = (productId: number, quantity: number) => {
+    const result: Record<FinishedComponentType, ComponentAllocation[]> = {
+      bra: [],
+      panties: [],
+      belt: [],
+      garter: []
+    };
+
+    for (const component of FINISHED_COMPONENTS) {
+      const hasStock = getComponentAvailability(productId, component) > 0;
+      result[component] = [
+        {
+          size: '',
+          quantity: hasStock ? quantity : 0
+        }
+      ];
+    }
+
+    return result;
+  };
+
+  const normalizeAllocationsForProduct = (
+    allocations: Record<FinishedComponentType, ComponentAllocation[]>,
+    quantity: number,
+    productId: number
+  ): Record<FinishedComponentType, ComponentAllocation[]> => {
+    const result: Record<FinishedComponentType, ComponentAllocation[]> = {
+      bra: [],
+      panties: [],
+      belt: [],
+      garter: []
+    };
+
+    for (const component of FINISHED_COMPONENTS) {
+      const hasStock = getComponentAvailability(productId, component) > 0;
+      const source = allocations[component] ?? [];
+      result[component] = hasStock ? rebalanceAllocations(source, quantity) : [{ size: '', quantity: 0 }];
+    }
+
+    return result;
+  };
+
   const matchedClient = useMemo(() => {
     const instagram = formState.customerInstagram.trim().toLowerCase();
     const phoneDigits = formState.customerPhone.replace(/\D/g, '');
@@ -325,6 +365,20 @@ const OrdersPage: React.FC = () => {
       return null;
     }
   }, [activeClient]);
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      return;
+    }
+
+    setFormState((prev) => ({
+      ...prev,
+      items: prev.items.map((item) => ({
+        ...item,
+        allocations: normalizeAllocationsForProduct(item.allocations, item.quantity, item.productId)
+      }))
+    }));
+  }, [finishedInventory, isModalOpen]);
 
   useEffect(() => {
     if (!isModalOpen || !matchedClient) {
@@ -440,14 +494,14 @@ const OrdersPage: React.FC = () => {
           ...current,
           productId,
           price: product?.effectiveSalePrice ?? product?.salePrice ?? current.price,
-          allocations: createAllocationTemplate(current.quantity)
+          allocations: createAllocationsForProduct(productId, current.quantity)
         };
       } else if (field === 'quantity') {
         const quantity = Math.max(1, Math.floor(Number(value)) || 1);
         updated[index] = {
           ...current,
           quantity,
-          allocations: normalizeAllocationsForQuantity(current.allocations, quantity)
+          allocations: normalizeAllocationsForProduct(current.allocations, quantity, current.productId)
         };
       } else {
         updated[index] = { ...current, [field]: Number(value) };
@@ -472,7 +526,7 @@ const OrdersPage: React.FC = () => {
           quantity: 1,
           price: defaultProduct.effectiveSalePrice ?? defaultProduct.salePrice,
           discount: 0,
-          allocations: createAllocationTemplate(1)
+          allocations: createAllocationsForProduct(defaultProduct.id, 1)
         }
       ]
     }));
@@ -613,12 +667,23 @@ const OrdersPage: React.FC = () => {
         .map((item) => {
           for (const component of FINISHED_COMPONENTS) {
             const totalAllocated = item.allocations[component].reduce((acc, allocation) => acc + allocation.quantity, 0);
+            const hasAvailability = getComponentAvailability(item.productId, component) > 0;
+            const shouldValidate = hasAvailability || totalAllocated > 0;
+
+            if (!shouldValidate) {
+              continue;
+            }
+
             if (totalAllocated !== item.quantity) {
               throw new Error(
                 `${COMPONENT_LABELS[component]}: розподіліть ${item.quantity} од. (зараз ${totalAllocated})`
               );
             }
-            if (item.allocations[component].some((allocation) => !allocation.size.trim())) {
+            if (
+              item.allocations[component].some(
+                (allocation) => allocation.quantity > 0 && !allocation.size.trim()
+              )
+            ) {
               throw new Error('Будь ласка, оберіть розмір для кожного елементу комплекту');
             }
           }
@@ -629,11 +694,13 @@ const OrdersPage: React.FC = () => {
             price: item.price,
             discount: item.discount,
             allocations: FINISHED_COMPONENTS.flatMap((component) =>
-              item.allocations[component].map((allocation) => ({
-                component,
-                size: allocation.size,
-                quantity: allocation.quantity
-              }))
+              item.allocations[component]
+                .filter((allocation) => allocation.quantity > 0 && allocation.size.trim())
+                .map((allocation) => ({
+                  component,
+                  size: allocation.size,
+                  quantity: allocation.quantity
+                }))
             )
           };
         });
@@ -1000,9 +1067,10 @@ const OrdersPage: React.FC = () => {
                         garter: 0
                       }
                     );
-                    const setsAvailable = Math.min(
-                      ...FINISHED_COMPONENTS.map((component) => totalsByComponent[component] ?? 0)
-                    );
+                    const positiveCounts = FINISHED_COMPONENTS.map(
+                      (component) => totalsByComponent[component] ?? 0
+                    ).filter((value) => value > 0);
+                    const setsAvailable = positiveCounts.length > 0 ? Math.min(...positiveCounts) : 0;
                     return (
                       <div key={index} className="space-y-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-sm">
                         <div className="grid gap-3 md:grid-cols-[1.5fr_repeat(3,1fr)_auto]">

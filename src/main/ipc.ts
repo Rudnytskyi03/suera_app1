@@ -117,23 +117,34 @@ function computeUnderwireUsage(
   }
   const row = db
     .prepare(
-      'SELECT id, quantity, underwire_units_per_bra FROM materials WHERE bra_underwire_size = ?'
+      `SELECT m.id, m.quantity, m.underwire_units_per_bra
+         FROM materials m
+         JOIN material_underwire_sizes mus ON mus.material_id = m.id
+        WHERE mus.size = ?
+        ORDER BY m.quantity DESC, m.id ASC
+        LIMIT 1`
     )
     .get(normalizedSize) as { id: number; quantity: number; underwire_units_per_bra: number } | undefined;
 
-  if (!row) {
+  const fallbackRow =
+    row ||
+    (db
+      .prepare('SELECT id, quantity, underwire_units_per_bra FROM materials WHERE bra_underwire_size = ?')
+      .get(normalizedSize) as { id: number; quantity: number; underwire_units_per_bra: number } | undefined);
+
+  if (!fallbackRow) {
     throw new Error(`Не налаштовано косточки для розміру ${normalizedSize}. Додайте матеріал у довіднику.`);
   }
 
-  const unitsPerBra = Number(row.underwire_units_per_bra ?? 0);
+  const unitsPerBra = Number(fallbackRow.underwire_units_per_bra ?? 0);
   if (!Number.isFinite(unitsPerBra) || unitsPerBra <= 0) {
     throw new Error(`Вкажіть кількість косточок на один бра для розміру ${normalizedSize}.`);
   }
 
-  const available = Number(row.quantity) || 0;
+  const available = Number(fallbackRow.quantity) || 0;
   const required = unitsPerBra * braCount;
   return {
-    materialId: row.id,
+    materialId: fallbackRow.id,
     available,
     required,
     size: normalizedSize,
@@ -249,15 +260,31 @@ function persistPhotoFromPayload(
   return relativePath;
 }
 
-function mapMaterialRecord(record: MaterialRecord) {
+function getUnderwireSizes(db: ReturnType<typeof getDatabase>, materialId: number) {
+  const rows = db
+    .prepare('SELECT size FROM material_underwire_sizes WHERE material_id = ? ORDER BY size')
+    .all(materialId) as Array<{ size: string }>;
+
+  const normalized = rows
+    .map((row) => normalizeFinishedSize(row.size))
+    .filter((value) => value && value !== 'UNSIZED') as string[];
+
+  return Array.from(new Set(normalized));
+}
+
+function mapMaterialRecord(db: ReturnType<typeof getDatabase>, record: MaterialRecord) {
   const absolutePhoto = resolvePhotoPath(record.photo ?? undefined, 'material');
   const fileUrl = absolutePhoto && fs.existsSync(absolutePhoto) ? pathToFileURL(absolutePhoto).toString() : undefined;
   const remoteUrl = !fileUrl && record.photo && /^https?:\/\//i.test(record.photo) ? record.photo : undefined;
   const photoUrl = fileUrl ?? remoteUrl;
-  const normalizedUnderwireSize =
-    typeof record.bra_underwire_size === 'string' && record.bra_underwire_size.trim().length > 0
-      ? record.bra_underwire_size.trim().toUpperCase()
-      : null;
+  let underwireSizes = getUnderwireSizes(db, record.id);
+  if (underwireSizes.length === 0 && typeof record.bra_underwire_size === 'string') {
+    const legacy = normalizeUnderwireSizeInput(record.bra_underwire_size);
+    if (legacy) {
+      underwireSizes = [legacy];
+    }
+  }
+  const normalizedUnderwireSize = underwireSizes[0] || null;
   const underwireUnits = normalizedUnderwireSize ? Number(record.underwire_units_per_bra ?? 0) : null;
 
   return {
@@ -269,7 +296,7 @@ function mapMaterialRecord(record: MaterialRecord) {
     pricePerUnit: record.price_per_unit,
     photoUrl,
     photoPath: record.photo ?? null,
-    braUnderwireSize: normalizedUnderwireSize,
+    braUnderwireSizes: underwireSizes,
     underwireUnitsPerBra: underwireUnits
   };
 }
@@ -352,18 +379,18 @@ export function registerIpcHandlers() {
     ensurePhotosDirectory('material');
     const stmt = db.prepare('SELECT * FROM materials ORDER BY name');
     const materials = stmt.all() as MaterialRecord[];
-    return materials.map(mapMaterialRecord);
+    return materials.map((material) => mapMaterialRecord(db, material));
   });
 
   ipcMain.handle('materials:create', (_event, payload) => {
-    const { newPhoto, braUnderwireSize, underwireUnitsPerBra, ...rest } = payload as {
+    const { newPhoto, underwireSizes, underwireUnitsPerBra, ...rest } = payload as {
       name: string;
       category: string;
       unit: 'meters' | 'pieces';
       quantity: number;
       pricePerUnit: number;
       newPhoto?: { originalName: string; filePath: string };
-      braUnderwireSize?: string | null;
+      underwireSizes?: string[];
       underwireUnitsPerBra?: number | null;
     };
 
@@ -372,9 +399,16 @@ export function registerIpcHandlers() {
       photoPath = persistPhotoFromPayload(newPhoto, 'material');
     }
 
-    const normalizedUnderwireSize = normalizeUnderwireSizeInput(braUnderwireSize);
+    const normalizedUnderwireSizes = Array.from(
+      new Set(
+        (underwireSizes || [])
+          .map((size) => normalizeFinishedSize(size))
+          .filter((size): size is string => Boolean(size && size !== 'UNSIZED'))
+      )
+    );
+    const normalizedUnderwireSize = normalizedUnderwireSizes[0] ?? null;
     let normalizedUnderwireUnits = 0;
-    if (normalizedUnderwireSize) {
+    if (normalizedUnderwireSizes.length > 0) {
       const parsedUnits = Number(underwireUnitsPerBra);
       if (!Number.isFinite(parsedUnits) || parsedUnits <= 0) {
         throw new Error('Кількість косточок на один бра повинна бути більшою за нуль.');
@@ -392,7 +426,19 @@ export function registerIpcHandlers() {
       underwireUnitsPerBra: normalizedUnderwireUnits
     });
     const created = db.prepare('SELECT * FROM materials WHERE id = ?').get(result.lastInsertRowid) as MaterialRecord;
-    return mapMaterialRecord(created);
+
+    const replaceUnderwireSizes = db.prepare(
+      'INSERT OR IGNORE INTO material_underwire_sizes (material_id, size) VALUES (?, ?)'
+    );
+    const replaceTxn = db.transaction((sizes: string[]) => {
+      db.prepare('DELETE FROM material_underwire_sizes WHERE material_id = ?').run(created.id);
+      for (const size of sizes) {
+        replaceUnderwireSizes.run(created.id, size);
+      }
+    });
+    replaceTxn(normalizedUnderwireSizes);
+
+    return mapMaterialRecord(db, created);
   });
 
   ipcMain.handle('materials:update', (_event, id: number, payload) => {
@@ -401,7 +447,7 @@ export function registerIpcHandlers() {
       throw new Error('Матеріал не знайдено');
     }
 
-    const { newPhoto, removePhoto, braUnderwireSize, underwireUnitsPerBra, ...rest } = payload as {
+    const { newPhoto, removePhoto, underwireSizes, underwireUnitsPerBra, ...rest } = payload as {
       name: string;
       category: string;
       unit: 'meters' | 'pieces';
@@ -409,7 +455,7 @@ export function registerIpcHandlers() {
       pricePerUnit: number;
       newPhoto?: { originalName: string; filePath: string };
       removePhoto?: boolean;
-      braUnderwireSize?: string | null;
+      underwireSizes?: string[];
       underwireUnitsPerBra?: number | null;
     };
 
@@ -427,9 +473,16 @@ export function registerIpcHandlers() {
       photoPath = persistPhotoFromPayload(newPhoto, 'material');
     }
 
-    const normalizedUnderwireSize = normalizeUnderwireSizeInput(braUnderwireSize);
+    const normalizedUnderwireSizes = Array.from(
+      new Set(
+        (underwireSizes || [])
+          .map((size) => normalizeFinishedSize(size))
+          .filter((size): size is string => Boolean(size && size !== 'UNSIZED'))
+      )
+    );
+    const normalizedUnderwireSize = normalizedUnderwireSizes[0] ?? null;
     let normalizedUnderwireUnits = 0;
-    if (normalizedUnderwireSize) {
+    if (normalizedUnderwireSizes.length > 0) {
       const parsedUnits = Number(underwireUnitsPerBra);
       if (!Number.isFinite(parsedUnits) || parsedUnits <= 0) {
         throw new Error('Кількість косточок на один бра повинна бути більшою за нуль.');
@@ -447,8 +500,20 @@ export function registerIpcHandlers() {
       braUnderwireSize: normalizedUnderwireSize,
       underwireUnitsPerBra: normalizedUnderwireUnits
     });
+
+    const replaceUnderwireSizes = db.prepare(
+      'INSERT OR IGNORE INTO material_underwire_sizes (material_id, size) VALUES (?, ?)'
+    );
+    const replaceTxn = db.transaction((sizes: string[]) => {
+      db.prepare('DELETE FROM material_underwire_sizes WHERE material_id = ?').run(id);
+      for (const size of sizes) {
+        replaceUnderwireSizes.run(id, size);
+      }
+    });
+    replaceTxn(normalizedUnderwireSizes);
+
     const updated = db.prepare('SELECT * FROM materials WHERE id = ?').get(id) as MaterialRecord;
-    return mapMaterialRecord(updated);
+    return mapMaterialRecord(db, updated);
   });
 
   ipcMain.handle(
@@ -1501,6 +1566,23 @@ export function registerIpcHandlers() {
       throw new Error('Додайте хоча б один товар до замовлення');
     }
 
+    const inventoryTotalsCache = new Map<number, Record<FinishedComponent, number>>();
+    const getInventoryTotals = (productId: number) => {
+      if (inventoryTotalsCache.has(productId)) {
+        return inventoryTotalsCache.get(productId)!;
+      }
+      const rows = db
+        .prepare('SELECT component, SUM(quantity) as total FROM finished_inventory WHERE product_id = ? GROUP BY component')
+        .all(productId) as Array<{ component: string; total: number | null }>;
+      const totals: Record<FinishedComponent, number> = { bra: 0, panties: 0, belt: 0, garter: 0 };
+      for (const row of rows) {
+        const component = ensureFinishedComponent(row.component);
+        totals[component] = Number(row.total) || 0;
+      }
+      inventoryTotalsCache.set(productId, totals);
+      return totals;
+    };
+
     const normalizedItems = items.map((item: any, index: number) => {
       const productId = Number(item.productId);
       if (!Number.isInteger(productId) || productId <= 0) {
@@ -1530,13 +1612,18 @@ export function registerIpcHandlers() {
         }
       );
 
-      if (allocationPayloads.length === 0) {
+      const grouped = groupAllocationsByComponent(allocationPayloads);
+
+      const inventoryTotals = getInventoryTotals(productId);
+      const requiredComponents = FINISHED_COMPONENTS.filter(
+        (component) => (inventoryTotals[component] ?? 0) > 0 || grouped[component].total > 0
+      );
+
+      if (requiredComponents.length > 0 && allocationPayloads.length === 0) {
         throw new Error('Розподіліть готові вироби для кожного товару');
       }
 
-      const grouped = groupAllocationsByComponent(allocationPayloads);
-
-      for (const component of FINISHED_COMPONENTS) {
+      for (const component of requiredComponents) {
         const total = grouped[component].total;
         if (total !== quantity) {
           throw new Error(
