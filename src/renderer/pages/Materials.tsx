@@ -25,7 +25,7 @@ type MaterialFormState = {
   unit: Material['unit'];
   quantity: string;
   pricePerUnit: string;
-  braUnderwireSizes: string;
+  braUnderwireSizes: string[];
   underwireUnitsPerBra: string;
 };
 
@@ -35,7 +35,7 @@ const defaultForm: MaterialFormState = {
   unit: 'meters',
   quantity: '',
   pricePerUnit: '',
-  braUnderwireSizes: '',
+  braUnderwireSizes: [],
   underwireUnitsPerBra: ''
 };
 
@@ -50,6 +50,8 @@ const createDefaultReceiptForm = () => ({
   comment: '',
   date: new Date().toISOString().split('T')[0]
 });
+
+const braUnderwireSizeOptions = ['70A', '70B', '75A', '75B', '80A', '80B', '85A', '85B'];
 
 const MaterialsPage: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([]);
@@ -99,7 +101,7 @@ const MaterialsPage: React.FC = () => {
         unit: material.unit,
         quantity: material.quantity.toString(),
         pricePerUnit: material.pricePerUnit.toString(),
-        braUnderwireSizes: material.braUnderwireSizes.join(', '),
+        braUnderwireSizes: material.braUnderwireSizes,
         underwireUnitsPerBra: material.underwireUnitsPerBra?.toString() ?? ''
       });
       setExistingPhoto(
@@ -146,6 +148,20 @@ const MaterialsPage: React.FC = () => {
     setReceiptForm(createDefaultReceiptForm());
   };
 
+  const toggleUnderwireSize = (size: string) => {
+    const normalized = size.toUpperCase();
+    setFormState((previous) => {
+      const nextSizes = previous.braUnderwireSizes.includes(normalized)
+        ? previous.braUnderwireSizes.filter((value) => value !== normalized)
+        : [...previous.braUnderwireSizes, normalized];
+      return {
+        ...previous,
+        braUnderwireSizes: nextSizes,
+        underwireUnitsPerBra: nextSizes.length === 0 ? '' : previous.underwireUnitsPerBra
+      };
+    });
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
@@ -163,7 +179,6 @@ const MaterialsPage: React.FC = () => {
       const underwireSizes = Array.from(
         new Set(
           formState.braUnderwireSizes
-            .split(/[,;]/)
             .map((value) => value.trim().toUpperCase())
             .filter((value) => value.length > 0 && value !== 'UNSIZED')
         )
@@ -563,22 +578,32 @@ const MaterialsPage: React.FC = () => {
                 </label>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2">
+                <div className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Розміри бра для косточок</span>
-                  <input
-                    value={formState.braUnderwireSizes}
-                    onChange={(event) => {
-                      const nextValue = event.target.value.toUpperCase();
-                      setFormState({
-                        ...formState,
-                        braUnderwireSizes: nextValue,
-                        underwireUnitsPerBra: nextValue.trim() ? formState.underwireUnitsPerBra : ''
-                      });
-                    }}
-                    placeholder="Наприклад: 75B, 80A, 70C"
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                  />
-                </label>
+                  <div className="flex flex-wrap gap-2">
+                    {braUnderwireSizeOptions.map((size) => {
+                      const isSelected = formState.braUnderwireSizes.includes(size);
+                      return (
+                        <label
+                          key={size}
+                          className={`cursor-pointer rounded-full border px-3 py-1 text-xs font-semibold uppercase transition ${
+                            isSelected
+                              ? 'border-purple-500 bg-purple-100 text-purple-700'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-purple-300'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={isSelected}
+                            onChange={() => toggleUnderwireSize(size)}
+                          />
+                          {size}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
                 <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-600">Косточки на 1 бра</span>
                   <input
@@ -590,7 +615,7 @@ const MaterialsPage: React.FC = () => {
                       setFormState({ ...formState, underwireUnitsPerBra: event.target.value })
                     }
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200 disabled:opacity-50"
-                    disabled={!formState.braUnderwireSizes.trim()}
+                    disabled={formState.braUnderwireSizes.length === 0}
                   />
                 </label>
               </div>
