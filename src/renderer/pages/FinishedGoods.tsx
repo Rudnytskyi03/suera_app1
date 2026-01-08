@@ -22,6 +22,17 @@ const COMPONENT_LABELS: Record<FinishedComponentType, string> = {
   garter: 'Гартер'
 };
 
+const formatComponentSizeSummary = (
+  sizes: Record<FinishedComponentType, string>,
+  components: Record<FinishedComponentType, number>
+) =>
+  FINISHED_COMPONENTS.filter((component) => (components[component] ?? 0) > 0)
+    .map((component) => {
+      const size = sizes[component]?.trim();
+      return size ? `${COMPONENT_LABELS[component]}: ${size}` : COMPONENT_LABELS[component];
+    })
+    .join(' · ');
+
 type ComponentSizeBreakdown = {
   size: string;
   quantity: number;
@@ -37,17 +48,16 @@ type GroupedInventoryRow = {
 
 type ProductionFormState = {
   productId: number;
-  size: string;
   sets: number;
   producedAt: string;
   note: string;
   components: Record<FinishedComponentType, number>;
+  componentSizes: Record<FinishedComponentType, string>;
   skipMaterialWriteOff: boolean;
 };
 
 const defaultFormState: ProductionFormState = {
   productId: 0,
-  size: '',
   sets: 0,
   producedAt: '',
   note: '',
@@ -56,6 +66,12 @@ const defaultFormState: ProductionFormState = {
     panties: 0,
     belt: 0,
     garter: 0
+  },
+  componentSizes: {
+    bra: '',
+    panties: '',
+    belt: '',
+    garter: ''
   },
   skipMaterialWriteOff: false
 };
@@ -204,6 +220,16 @@ const FinishedGoodsPage: React.FC = () => {
     }));
   };
 
+  const handleComponentSizeChange = (component: FinishedComponentType, value: string) => {
+    setFormState((prev) => ({
+      ...prev,
+      componentSizes: {
+        ...prev.componentSizes,
+        [component]: value.toUpperCase()
+      }
+    }));
+  };
+
   const handleEditFieldChange = <K extends keyof ProductionFormState>(
     key: K,
     value: ProductionFormState[K]
@@ -221,11 +247,20 @@ const FinishedGoodsPage: React.FC = () => {
     }));
   };
 
+  const handleEditComponentSizeChange = (component: FinishedComponentType, value: string) => {
+    setEditFormState((prev) => ({
+      ...prev,
+      componentSizes: {
+        ...prev.componentSizes,
+        [component]: value.toUpperCase()
+      }
+    }));
+  };
+
   const openEditModal = (batch: FinishedBatch) => {
     setEditingBatch(batch);
     setEditFormState({
       productId: batch.productId,
-      size: batch.size,
       sets: batch.sets,
       producedAt: toDateTimeLocalInput(batch.producedAt),
       note: batch.note ?? '',
@@ -234,6 +269,12 @@ const FinishedGoodsPage: React.FC = () => {
         panties: batch.components.panties,
         belt: batch.components.belt,
         garter: batch.components.garter
+      },
+      componentSizes: {
+        bra: batch.componentSizes.bra,
+        panties: batch.componentSizes.panties,
+        belt: batch.componentSizes.belt,
+        garter: batch.componentSizes.garter
       },
       skipMaterialWriteOff: batch.skipMaterials
     });
@@ -255,11 +296,6 @@ const FinishedGoodsPage: React.FC = () => {
       return;
     }
 
-    if (!editFormState.size.trim()) {
-      showToast({ title: 'Вкажіть розмір', type: 'error' });
-      return;
-    }
-
     const components = { ...editFormState.components } as Record<FinishedComponentType, number>;
     const totalComponents = FINISHED_COMPONENTS.reduce(
       (sum, component) => sum + (components[component] || 0),
@@ -271,16 +307,24 @@ const FinishedGoodsPage: React.FC = () => {
       return;
     }
 
+    const missingSize = FINISHED_COMPONENTS.find(
+      (component) => components[component] > 0 && !editFormState.componentSizes[component]?.trim()
+    );
+    if (missingSize) {
+      showToast({ title: `Вкажіть розмір для компонента "${COMPONENT_LABELS[missingSize]}"`, type: 'error' });
+      return;
+    }
+
     setIsUpdatingBatch(true);
     try {
       await updateProductionBatch({
         batchId: editingBatch.id,
         productId: editingBatch.productId,
-        size: editFormState.size,
         sets: editFormState.sets,
         producedAt: editFormState.producedAt,
         note: editFormState.note,
-        components
+        components,
+        componentSizes: editFormState.componentSizes
       });
       showToast({ title: 'Партію оновлено', type: 'success' });
       closeEditModal(true);
@@ -327,10 +371,6 @@ const FinishedGoodsPage: React.FC = () => {
       showToast({ title: 'Оберіть товар', type: 'error' });
       return;
     }
-    if (!formState.size.trim()) {
-      showToast({ title: 'Вкажіть розмір', type: 'error' });
-      return;
-    }
 
     const components = { ...formState.components } as Record<FinishedComponentType, number>;
     const totalComponents = FINISHED_COMPONENTS.reduce((sum, component) => sum + (components[component] || 0), 0);
@@ -340,15 +380,23 @@ const FinishedGoodsPage: React.FC = () => {
       return;
     }
 
+    const missingSize = FINISHED_COMPONENTS.find(
+      (component) => components[component] > 0 && !formState.componentSizes[component]?.trim()
+    );
+    if (missingSize) {
+      showToast({ title: `Вкажіть розмір для компонента "${COMPONENT_LABELS[missingSize]}"`, type: 'error' });
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await recordProduction({
         productId: formState.productId,
-        size: formState.size,
         sets: formState.sets,
         producedAt: formState.producedAt,
         note: formState.note,
         components,
+        componentSizes: formState.componentSizes,
         skipMaterialWriteOff: formState.skipMaterialWriteOff
       });
       showToast({ title: 'Прихід готових виробів додано', type: 'success' });
@@ -471,7 +519,9 @@ const FinishedGoodsPage: React.FC = () => {
                   <div className="flex flex-wrap items-start justify-between gap-3 text-sm">
                     <div>
                       <div className="font-semibold text-slate-800">{batch.productName}</div>
-                      <div className="text-xs text-slate-500">Розмір: {batch.size}</div>
+                      <div className="text-xs text-slate-500">
+                        {formatComponentSizeSummary(batch.componentSizes, batch.components) || 'Розміри не вказані'}
+                      </div>
                       {batch.skipMaterials && (
                         <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700">
                           Матеріали не списані
@@ -543,15 +593,6 @@ const FinishedGoodsPage: React.FC = () => {
 
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-2">
-                <span className="text-sm font-medium text-slate-600">Розмір</span>
-                <input
-                  value={formState.size}
-                  onChange={(event) => handleFormChange('size', event.target.value.toUpperCase())}
-                  placeholder="Наприклад: S/M або 75B"
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                />
-              </label>
-              <label className="space-y-2">
                 <span className="text-sm font-medium text-slate-600">Комплектів</span>
                 <input
                   type="number"
@@ -563,18 +604,30 @@ const FinishedGoodsPage: React.FC = () => {
               </label>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               {FINISHED_COMPONENTS.map((component) => (
-                <label key={component} className="space-y-1">
-                  <span className="text-xs font-medium text-slate-600">{COMPONENT_LABELS[component]}</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={formState.components[component] ?? 0}
-                    onChange={(event) => handleComponentChange(component, Number(event.target.value))}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                  />
-                </label>
+                <div key={component} className="space-y-2 rounded-2xl border border-slate-100 bg-white px-4 py-3">
+                  <div className="text-xs font-semibold text-slate-600">{COMPONENT_LABELS[component]}</div>
+                  <label className="space-y-1">
+                    <span className="text-[11px] font-medium text-slate-500">Розмір</span>
+                    <input
+                      value={formState.componentSizes[component] ?? ''}
+                      onChange={(event) => handleComponentSizeChange(component, event.target.value)}
+                      placeholder="Наприклад: 75B або S"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[11px] font-medium text-slate-500">Кількість</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={formState.components[component] ?? 0}
+                      onChange={(event) => handleComponentChange(component, Number(event.target.value))}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                    />
+                  </label>
+                </div>
               ))}
             </div>
 
@@ -673,16 +726,6 @@ const FinishedGoodsPage: React.FC = () => {
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="space-y-2">
-                    <span className="text-sm font-medium text-slate-600">Розмір</span>
-                    <input
-                      value={editFormState.size}
-                      onChange={(event) =>
-                        handleEditFieldChange('size', event.target.value.toUpperCase())
-                      }
-                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                    />
-                  </label>
-                  <label className="space-y-2">
                     <span className="text-sm font-medium text-slate-600">Комплектів</span>
                     <input
                       type="number"
@@ -696,20 +739,34 @@ const FinishedGoodsPage: React.FC = () => {
                   </label>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-4 md:grid-cols-2">
                   {FINISHED_COMPONENTS.map((component) => (
-                    <label key={component} className="space-y-1">
-                      <span className="text-xs font-medium text-slate-600">{COMPONENT_LABELS[component]}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={editFormState.components[component] ?? 0}
-                        onChange={(event) =>
-                          handleEditComponentChange(component, Number(event.target.value))
-                        }
-                        className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
-                      />
-                    </label>
+                    <div key={component} className="space-y-2 rounded-2xl border border-slate-100 bg-white px-4 py-3">
+                      <div className="text-xs font-semibold text-slate-600">{COMPONENT_LABELS[component]}</div>
+                      <label className="space-y-1">
+                        <span className="text-[11px] font-medium text-slate-500">Розмір</span>
+                        <input
+                          value={editFormState.componentSizes[component] ?? ''}
+                          onChange={(event) =>
+                            handleEditComponentSizeChange(component, event.target.value)
+                          }
+                          placeholder="Наприклад: 75B або S"
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[11px] font-medium text-slate-500">Кількість</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={editFormState.components[component] ?? 0}
+                          onChange={(event) =>
+                            handleEditComponentChange(component, Number(event.target.value))
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-200"
+                        />
+                      </label>
+                    </div>
                   ))}
                 </div>
 
@@ -762,8 +819,10 @@ const FinishedGoodsPage: React.FC = () => {
             <div className="max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl bg-white p-8 shadow-2xl">
               <h2 className="text-xl font-semibold text-slate-900">Видалити партію?</h2>
               <p className="mt-3 text-sm text-slate-600">
-                Після видалення партії «{batchToDelete.productName}» розміру {batchToDelete.size} запаси
-                готових виробів буде зменшено, а використані матеріали повернуться на склад.
+                Після видалення партії «{batchToDelete.productName}» (
+                {formatComponentSizeSummary(batchToDelete.componentSizes, batchToDelete.components) ||
+                  'розміри не вказані'}
+                ) запаси готових виробів буде зменшено, а використані матеріали повернуться на склад.
               </p>
               <p className="mt-2 text-xs text-slate-500">
                 Переконайтеся, що вироби з цієї партії не використані у замовленнях. Якщо їх уже продано,

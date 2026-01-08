@@ -144,6 +144,7 @@ export type FinishedBatch = {
   productId: number;
   productName: string;
   size: string;
+  componentSizes: Record<FinishedComponentType, string>;
   sets: number;
   components: Record<FinishedComponentType, number>;
   note?: string | null;

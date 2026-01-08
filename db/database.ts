@@ -150,6 +150,10 @@ CREATE TABLE IF NOT EXISTS finished_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   size TEXT NOT NULL,
+  bra_size TEXT NOT NULL DEFAULT '',
+  panties_size TEXT NOT NULL DEFAULT '',
+  belt_size TEXT NOT NULL DEFAULT '',
+  garter_size TEXT NOT NULL DEFAULT '',
   sets INTEGER NOT NULL DEFAULT 0,
   bra INTEGER NOT NULL DEFAULT 0,
   panties INTEGER NOT NULL DEFAULT 0,
@@ -185,6 +189,22 @@ CREATE TABLE IF NOT EXISTS order_finished_allocations (
   ensureColumn(db, 'materials', 'underwire_units_per_bra', 'underwire_units_per_bra REAL NOT NULL DEFAULT 0');
   ensureMaterialUnderwireSizesTable(db);
   ensureColumn(db, 'finished_batches', 'skip_materials', 'skip_materials INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'finished_batches', 'bra_size', "bra_size TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'finished_batches', 'panties_size', "panties_size TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'finished_batches', 'belt_size', "belt_size TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'finished_batches', 'garter_size', "garter_size TEXT NOT NULL DEFAULT ''");
+  db.prepare(
+    "UPDATE finished_batches SET bra_size = size WHERE (bra_size IS NULL OR bra_size = '') AND size IS NOT NULL"
+  ).run();
+  db.prepare(
+    "UPDATE finished_batches SET panties_size = size WHERE (panties_size IS NULL OR panties_size = '') AND size IS NOT NULL"
+  ).run();
+  db.prepare(
+    "UPDATE finished_batches SET belt_size = size WHERE (belt_size IS NULL OR belt_size = '') AND size IS NOT NULL"
+  ).run();
+  db.prepare(
+    "UPDATE finished_batches SET garter_size = size WHERE (garter_size IS NULL OR garter_size = '') AND size IS NOT NULL"
+  ).run();
   backfillClientsFromOrders(db);
 
   const defaultUserStmt = db.prepare('SELECT * FROM users WHERE email = ?');
@@ -338,13 +358,18 @@ function ensureFinishedTables(db: Database.Database) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
         size TEXT NOT NULL,
+        bra_size TEXT NOT NULL DEFAULT '',
+        panties_size TEXT NOT NULL DEFAULT '',
+        belt_size TEXT NOT NULL DEFAULT '',
+        garter_size TEXT NOT NULL DEFAULT '',
         sets INTEGER NOT NULL DEFAULT 0,
         bra INTEGER NOT NULL DEFAULT 0,
         panties INTEGER NOT NULL DEFAULT 0,
         belt INTEGER NOT NULL DEFAULT 0,
         garter INTEGER NOT NULL DEFAULT 0,
         note TEXT,
-        produced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        produced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        skip_materials INTEGER NOT NULL DEFAULT 0
       );
     `);
   }
@@ -541,6 +566,10 @@ export type FinishedBatchRecord = {
   id: number;
   product_id: number;
   size: string;
+  bra_size: string;
+  panties_size: string;
+  belt_size: string;
+  garter_size: string;
   sets: number;
   bra: number;
   panties: number;

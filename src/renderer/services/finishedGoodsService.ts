@@ -4,11 +4,12 @@ export type ProductionComponentInput = Partial<Record<FinishedComponentType, num
 
 export type RecordProductionInput = {
   productId: number;
-  size: string;
+  size?: string;
   sets?: number;
   producedAt?: string;
   note?: string;
   components: ProductionComponentInput;
+  componentSizes: Partial<Record<FinishedComponentType, string>>;
   skipMaterialWriteOff?: boolean;
 };
 

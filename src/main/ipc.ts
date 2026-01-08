@@ -23,10 +23,10 @@ const FINISHED_COMPONENTS = ['bra', 'panties', 'belt', 'garter'] as const;
 type FinishedComponent = (typeof FINISHED_COMPONENTS)[number];
 
 const FINISHED_COMPONENT_LABELS: Record<FinishedComponent, string> = {
-  bra: 'бра',
-  panties: 'трусики',
-  belt: 'пояс',
-  garter: 'гартер'
+  bra: 'Бра',
+  panties: 'Трусики',
+  belt: 'Пояс',
+  garter: 'Гартер'
 };
 
 type PhotoScope = keyof typeof PHOTO_DIRECTORIES;
@@ -618,14 +618,15 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('finished:produce', (_event, payload) => {
-    const { productId, size, components, sets, producedAt, note, skipMaterialWriteOff } = payload as {
+    const { productId, size, components, sets, producedAt, note, skipMaterialWriteOff, componentSizes } = payload as {
       productId: number;
-      size: string;
+      size?: string;
       components?: Partial<Record<string, number>>;
       sets?: number;
       producedAt?: string;
       note?: string;
       skipMaterialWriteOff?: boolean;
+      componentSizes?: Partial<Record<string, string>>;
     };
 
     if (!productId) {
@@ -637,17 +638,29 @@ export function registerIpcHandlers() {
       throw new Error('Товар не знайдено');
     }
 
-    const normalizedSize = normalizeFinishedSize(size);
     const normalizedComponents: Record<FinishedComponent, number> = {
       bra: 0,
       panties: 0,
       belt: 0,
       garter: 0
     };
+    const fallbackSize = normalizeFinishedSize(size ?? '');
+    const normalizedComponentSizes: Record<FinishedComponent, string> = {
+      bra: fallbackSize,
+      panties: fallbackSize,
+      belt: fallbackSize,
+      garter: fallbackSize
+    };
 
     for (const component of FINISHED_COMPONENTS) {
       const value = components?.[component];
       normalizedComponents[component] = Number.isFinite(value) ? Math.max(0, Math.floor(Number(value))) : 0;
+      const rawSize = componentSizes?.[component];
+      const normalizedSize = rawSize ? normalizeFinishedSize(rawSize) : fallbackSize;
+      normalizedComponentSizes[component] = normalizedSize;
+      if (normalizedComponents[component] > 0 && normalizedSize === 'UNSIZED') {
+        throw new Error(`Вкажіть розмір для компонента "${FINISHED_COMPONENT_LABELS[component]}"`);
+      }
     }
 
     const totalPieces = FINISHED_COMPONENTS.reduce((acc, component) => acc + normalizedComponents[component], 0);
@@ -676,7 +689,7 @@ export function registerIpcHandlers() {
     const transaction = db.transaction(() => {
       const underwireUsage =
         !skipMaterials && normalizedComponents.bra > 0
-          ? computeUnderwireUsage(db, normalizedSize, normalizedComponents.bra)
+          ? computeUnderwireUsage(db, normalizedComponentSizes.bra, normalizedComponents.bra)
           : null;
 
       if (!skipMaterials) {
@@ -725,12 +738,20 @@ export function registerIpcHandlers() {
         }
       }
 
+      const sizeSummary =
+        [normalizedComponentSizes.bra, normalizedComponentSizes.panties, normalizedComponentSizes.belt, normalizedComponentSizes.garter]
+          .find((value) => value !== 'UNSIZED') ?? 'UNSIZED';
+
       db.prepare(
-        `INSERT INTO finished_batches (product_id, size, sets, bra, panties, belt, garter, note, produced_at, skip_materials)
-         VALUES (@productId, @size, @sets, @bra, @panties, @belt, @garter, @note, @producedAt, @skipMaterials)`
+        `INSERT INTO finished_batches (product_id, size, bra_size, panties_size, belt_size, garter_size, sets, bra, panties, belt, garter, note, produced_at, skip_materials)
+         VALUES (@productId, @size, @braSize, @pantiesSize, @beltSize, @garterSize, @sets, @bra, @panties, @belt, @garter, @note, @producedAt, @skipMaterials)`
       ).run({
         productId,
-        size: normalizedSize,
+        size: sizeSummary,
+        braSize: normalizedComponentSizes.bra,
+        pantiesSize: normalizedComponentSizes.panties,
+        beltSize: normalizedComponentSizes.belt,
+        garterSize: normalizedComponentSizes.garter,
         sets: setsToProduce,
         bra: normalizedComponents.bra,
         panties: normalizedComponents.panties,
@@ -744,7 +765,7 @@ export function registerIpcHandlers() {
       for (const component of FINISHED_COMPONENTS) {
         const quantity = normalizedComponents[component];
         if (quantity > 0) {
-          applyFinishedInventoryDelta(db, productId, component, normalizedSize, quantity);
+          applyFinishedInventoryDelta(db, productId, component, normalizedComponentSizes[component], quantity);
         }
       }
     });
@@ -755,13 +776,14 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('finished:update', (_event, payload) => {
-    const { batchId, size, components, sets, producedAt, note } = payload as {
+    const { batchId, size, components, sets, producedAt, note, componentSizes } = payload as {
       batchId: number;
       size?: string;
       components?: Partial<Record<string, number>>;
       sets?: number;
       producedAt?: string;
       note?: string;
+      componentSizes?: Partial<Record<string, string>>;
     };
 
     if (!batchId) {
@@ -778,7 +800,7 @@ export function registerIpcHandlers() {
 
     const productId = existing.product_id;
     const previousSize = normalizeFinishedSize(existing.size);
-    const nextSize = size ? normalizeFinishedSize(size) : previousSize;
+    const fallbackSize = normalizeFinishedSize(size ?? existing.size);
 
     const previousComponents: Record<FinishedComponent, number> = {
       bra: existing.bra,
@@ -786,13 +808,26 @@ export function registerIpcHandlers() {
       belt: existing.belt,
       garter: existing.garter
     };
+    const previousComponentSizes: Record<FinishedComponent, string> = {
+      bra: normalizeFinishedSize(existing.bra_size || existing.size),
+      panties: normalizeFinishedSize(existing.panties_size || existing.size),
+      belt: normalizeFinishedSize(existing.belt_size || existing.size),
+      garter: normalizeFinishedSize(existing.garter_size || existing.size)
+    };
 
     const normalizedComponents: Record<FinishedComponent, number> = { ...previousComponents };
+    const normalizedComponentSizes: Record<FinishedComponent, string> = { ...previousComponentSizes };
 
     for (const component of FINISHED_COMPONENTS) {
       const value = components?.[component];
       if (Number.isFinite(value)) {
         normalizedComponents[component] = Math.max(0, Math.floor(Number(value)));
+      }
+      const rawSize = componentSizes?.[component];
+      const normalizedSize = rawSize ? normalizeFinishedSize(rawSize) : fallbackSize;
+      normalizedComponentSizes[component] = normalizedSize;
+      if (normalizedComponents[component] > 0 && normalizedSize === 'UNSIZED') {
+        throw new Error(`Вкажіть розмір для компонента "${FINISHED_COMPONENT_LABELS[component]}"`);
       }
     }
 
@@ -870,11 +905,11 @@ export function registerIpcHandlers() {
         }
 
         if (previousComponents.bra > 0) {
-          previousUnderwireUsage = computeUnderwireUsage(db, previousSize, previousComponents.bra);
+          previousUnderwireUsage = computeUnderwireUsage(db, previousComponentSizes.bra, previousComponents.bra);
         }
 
         if (normalizedComponents.bra > 0) {
-          nextUnderwireUsage = computeUnderwireUsage(db, nextSize, normalizedComponents.bra);
+          nextUnderwireUsage = computeUnderwireUsage(db, normalizedComponentSizes.bra, normalizedComponents.bra);
         }
 
         if (nextUnderwireUsage) {
@@ -916,20 +951,44 @@ export function registerIpcHandlers() {
       for (const component of FINISHED_COMPONENTS) {
         const previousQuantity = previousComponents[component];
         if (previousQuantity > 0) {
-          applyFinishedInventoryDelta(db, productId, component, previousSize, -previousQuantity);
+          applyFinishedInventoryDelta(
+            db,
+            productId,
+            component,
+            previousComponentSizes[component],
+            -previousQuantity
+          );
         }
       }
 
       for (const component of FINISHED_COMPONENTS) {
         const nextQuantity = normalizedComponents[component];
         if (nextQuantity > 0) {
-          applyFinishedInventoryDelta(db, productId, component, nextSize, nextQuantity);
+          applyFinishedInventoryDelta(
+            db,
+            productId,
+            component,
+            normalizedComponentSizes[component],
+            nextQuantity
+          );
         }
       }
+
+      const sizeSummary =
+        [
+          normalizedComponentSizes.bra,
+          normalizedComponentSizes.panties,
+          normalizedComponentSizes.belt,
+          normalizedComponentSizes.garter
+        ].find((value) => value !== 'UNSIZED') ?? 'UNSIZED';
 
       db.prepare(
         `UPDATE finished_batches
             SET size = @size,
+                bra_size = @braSize,
+                panties_size = @pantiesSize,
+                belt_size = @beltSize,
+                garter_size = @garterSize,
                 sets = @sets,
                 bra = @bra,
                 panties = @panties,
@@ -940,7 +999,11 @@ export function registerIpcHandlers() {
           WHERE id = @id`
       ).run({
         id: existing.id,
-        size: nextSize,
+        size: sizeSummary,
+        braSize: normalizedComponentSizes.bra,
+        pantiesSize: normalizedComponentSizes.panties,
+        beltSize: normalizedComponentSizes.belt,
+        garterSize: normalizedComponentSizes.garter,
         sets: nextSets,
         bra: normalizedComponents.bra,
         panties: normalizedComponents.panties,
@@ -970,12 +1033,17 @@ export function registerIpcHandlers() {
     }
 
     const productId = existing.product_id;
-    const previousSize = normalizeFinishedSize(existing.size);
     const previousComponents: Record<FinishedComponent, number> = {
       bra: existing.bra,
       panties: existing.panties,
       belt: existing.belt,
       garter: existing.garter
+    };
+    const previousComponentSizes: Record<FinishedComponent, string> = {
+      bra: normalizeFinishedSize(existing.bra_size || existing.size),
+      panties: normalizeFinishedSize(existing.panties_size || existing.size),
+      belt: normalizeFinishedSize(existing.belt_size || existing.size),
+      garter: normalizeFinishedSize(existing.garter_size || existing.size)
     };
 
     const previousSets = existing.sets ?? computeTotalSets(previousComponents);
@@ -983,7 +1051,7 @@ export function registerIpcHandlers() {
 
     const previousUnderwireUsage =
       !skipMaterials && previousComponents.bra > 0
-        ? computeUnderwireUsage(db, previousSize, previousComponents.bra)
+        ? computeUnderwireUsage(db, previousComponentSizes.bra, previousComponents.bra)
         : null;
 
     const materials = !skipMaterials
@@ -1016,7 +1084,13 @@ export function registerIpcHandlers() {
       for (const component of FINISHED_COMPONENTS) {
         const quantity = previousComponents[component];
         if (quantity > 0) {
-          applyFinishedInventoryDelta(db, productId, component, previousSize, -quantity);
+          applyFinishedInventoryDelta(
+            db,
+            productId,
+            component,
+            previousComponentSizes[component],
+            -quantity
+          );
         }
       }
 
@@ -1044,6 +1118,12 @@ export function registerIpcHandlers() {
       productId: row.product_id,
       productName: row.product_name,
       size: normalizeFinishedSize(row.size),
+      componentSizes: {
+        bra: normalizeFinishedSize(row.bra_size || row.size),
+        panties: normalizeFinishedSize(row.panties_size || row.size),
+        belt: normalizeFinishedSize(row.belt_size || row.size),
+        garter: normalizeFinishedSize(row.garter_size || row.size)
+      },
       sets: row.sets,
       components: {
         bra: row.bra,
