@@ -51,7 +51,20 @@ const createDefaultReceiptForm = () => ({
   date: new Date().toISOString().split('T')[0]
 });
 
-const braUnderwireSizeOptions = ['70A', '70B', '75A', '75B', '80A', '80B', '85A', '85B'];
+const braUnderwireSizeOptions = [
+  '70A',
+  '70B',
+  '70C',
+  '75A',
+  '75B',
+  '75C',
+  '80A',
+  '80B',
+  '80C',
+  '85A',
+  '85B',
+  '85C'
+];
 
 const MaterialsPage: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([]);
