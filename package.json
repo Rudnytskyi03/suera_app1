@@ -9,6 +9,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "install": "node -e \"console.log('Use npm install (without run) to install dependencies.')\"",
     "postinstall": "electron-builder install-app-deps",
     "rebuild:native": "electron-builder install-app-deps",
     "package:mac": "npm run build && electron-builder --config electron-builder.json --mac dmg"
