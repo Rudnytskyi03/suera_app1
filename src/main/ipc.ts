@@ -272,7 +272,17 @@ function getUnderwireSizes(db: ReturnType<typeof getDatabase>, materialId: numbe
   return Array.from(new Set(normalized));
 }
 
-function mapMaterialRecord(db: ReturnType<typeof getDatabase>, record: MaterialRecord) {
+function mapMaterialRecord(
+  dbOrRecord: ReturnType<typeof getDatabase> | MaterialRecord,
+  maybeRecord?: MaterialRecord
+) {
+  const db = maybeRecord ? (dbOrRecord as ReturnType<typeof getDatabase>) : getDatabase();
+  const record = (maybeRecord ?? dbOrRecord) as MaterialRecord | undefined;
+
+  if (!record) {
+    throw new Error('Матеріал не знайдено');
+  }
+
   const absolutePhoto = resolvePhotoPath(record.photo ?? undefined, 'material');
   const fileUrl = absolutePhoto && fs.existsSync(absolutePhoto) ? pathToFileURL(absolutePhoto).toString() : undefined;
   const remoteUrl = !fileUrl && record.photo && /^https?:\/\//i.test(record.photo) ? record.photo : undefined;
