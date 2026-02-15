@@ -566,7 +566,7 @@ export function registerIpcHandlers() {
         .prepare('SELECT * FROM materials WHERE id = ?')
         .get(materialId) as MaterialRecord;
 
-      return mapMaterialRecord(updated);
+      return mapMaterialRecord(db, updated);
     }
   );
 
